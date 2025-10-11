@@ -1,8 +1,56 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, TrendingDown, DollarSign, Activity, PieChart, Clock, AlertCircle } from 'lucide-react';
+import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw, X, CheckCircle, XCircle } from 'lucide-react';
 
 const API_BASE_URL = '/api';
+
+// Toast Notification Component
+const Toast = ({ message, type = 'error', onClose }) => {
+  const bgColor = type === 'error' ? 'bg-red-50 border-red-200' : type === 'success' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200';
+  const textColor = type === 'error' ? 'text-red-800' : type === 'success' ? 'text-green-800' : 'text-blue-800';
+  const Icon = type === 'error' ? XCircle : type === 'success' ? CheckCircle : AlertCircle;
+  
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onClose();
+    }, 5000); // Auto-dismiss after 5 seconds
+    
+    return () => clearTimeout(timer);
+  }, [onClose]);
+  
+  return (
+    <div className={`flex items-start gap-3 p-4 mb-3 rounded-lg border ${bgColor} ${textColor} shadow-lg animate-slideIn`}>
+      <Icon className="w-5 h-5 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="text-sm font-medium">{message}</p>
+      </div>
+      <button 
+        onClick={onClose}
+        className="flex-shrink-0 hover:opacity-70 transition-opacity"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+};
+
+// Toast Container Component
+const ToastContainer = ({ toasts, removeToast }) => {
+  if (toasts.length === 0) return null;
+  
+  return (
+    <div className="fixed top-4 right-4 z-50 w-96 max-w-full">
+      {toasts.map(toast => (
+        <Toast 
+          key={toast.id} 
+          message={toast.message} 
+          type={toast.type}
+          onClose={() => removeToast(toast.id)}
+        />
+      ))}
+    </div>
+  );
+};
 
 const QMTTradingDashboard = () => {
   const [strategies, setStrategies] = useState([]);
@@ -11,9 +59,134 @@ const QMTTradingDashboard = () => {
   const [performance, setPerformance] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [dailyPnl, setDailyPnl] = useState([]);
+  const [holdingsHistory, setHoldingsHistory] = useState({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [criticalError, setCriticalError] = useState(null); // Only for critical failures
   const [activeTab, setActiveTab] = useState('overview');
+  const [toasts, setToasts] = useState([]);
+  
+  // Date range state
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  
+  // Toast management functions
+  const addToast = useCallback((message, type = 'error') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+  }, []);
+  
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  }, []);
+
+  const fetchStrategies = async () => {
+    try {
+      setCriticalError(null);
+      const response = await fetch(`${API_BASE_URL}/strategies?dry_run=true`);
+      if (!response.ok) throw new Error('Failed to fetch strategies');
+      const data = await response.json();
+      if (data.strategies && data.strategies.length > 0) {
+        setStrategies(data.strategies);
+        setSelectedStrategy(data.strategies[1]);
+      } else {
+        setCriticalError('No strategies found. Please ensure your Python backend is running and has data.');
+      }
+    } catch (error) {
+      console.error('Error fetching strategies:', error);
+      setCriticalError(`Cannot connect to backend API. Please ensure Python FastAPI server is running on port 8000. Error: ${error.message}`);
+      setLoading(false);
+    }
+  };
+
+  const fetchAllData = useCallback(async () => {
+    setLoading(true);
+    
+    try {
+      // Build query parameters with date range
+      const dateParams = new URLSearchParams();
+      dateParams.append('dry_run', 'true');
+      if (startDate) dateParams.append('start_date', startDate);
+      if (endDate) dateParams.append('end_date', endDate);
+      
+      const dateParamsStr = dateParams.toString();
+      const summaryParams = new URLSearchParams({ dry_run: 'true' });
+      if (endDate) summaryParams.append('trade_date', endDate);
+      
+      // Build transactions query parameters with date range
+      const transactionsParams = new URLSearchParams({ limit: '200', dry_run: 'true' });
+      if (startDate) transactionsParams.append('start_date', startDate);
+      if (endDate) transactionsParams.append('end_date', endDate);
+      
+      // Fetch all data with individual error handling
+      const results = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/summary?${summaryParams.toString()}`),
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/performance?${dateParamsStr}&use_metrics=true`),
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/transactions?${transactionsParams.toString()}`),
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/daily-pnl?${dateParamsStr}`),
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/holdings?${dateParamsStr}`)
+      ]);
+
+      // Process summary
+      if (results[0].status === 'fulfilled' && results[0].value.ok) {
+        const summaryData = await results[0].value.json();
+        setSummary(summaryData);
+      } else {
+        console.error('Failed to fetch summary:', results[0]);
+        addToast('Failed to load portfolio summary. Please try again.', 'error');
+      }
+
+      // Process performance
+      if (results[1].status === 'fulfilled' && results[1].value.ok) {
+        const performanceData = await results[1].value.json();
+        setPerformance(performanceData);
+      } else {
+        console.error('Failed to fetch performance:', results[1]);
+        addToast('Failed to load performance metrics. Please try again.', 'error');
+      }
+
+      // Process transactions
+      if (results[2].status === 'fulfilled' && results[2].value.ok) {
+        const transactionsData = await results[2].value.json();
+        setTransactions(transactionsData);
+      } else {
+        console.error('Failed to fetch transactions:', results[2]);
+        addToast('Failed to load transactions. Please try again.', 'error');
+      }
+
+      // Process daily PnL
+      if (results[3].status === 'fulfilled' && results[3].value.ok) {
+        const pnlData = await results[3].value.json();
+        if (pnlData.daily_values) {
+          setDailyPnl(pnlData.daily_values.map(d => ({
+            date: d.trade_date,
+            value: d.total_value,
+            cash: d.cash_balance,
+            holdings: d.holdings_value
+          })));
+        }
+      } else {
+        console.error('Failed to fetch daily PnL:', results[3]);
+        addToast('Failed to load daily PnL data. Please try again.', 'error');
+      }
+
+      // Process holdings history
+      if (results[4].status === 'fulfilled' && results[4].value.ok) {
+        const holdingsData = await results[4].value.json();
+        if (holdingsData.holdings_by_date) {
+          setHoldingsHistory(holdingsData.holdings_by_date);
+        }
+      } else {
+        console.error('Failed to fetch holdings history:', results[4]);
+        addToast('Failed to load holdings history. Please try again.', 'error');
+      }
+      
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      addToast(`Unexpected error: ${error.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedStrategy, startDate, endDate, addToast]);
 
   useEffect(() => {
     fetchStrategies();
@@ -23,67 +196,8 @@ const QMTTradingDashboard = () => {
     if (selectedStrategy) {
       fetchAllData();
     }
-  }, [selectedStrategy]);
-
-  const fetchStrategies = async () => {
-    try {
-      setError(null);
-      const response = await fetch(`${API_BASE_URL}/strategies?dry_run=true`);
-      if (!response.ok) throw new Error('Failed to fetch strategies');
-      const data = await response.json();
-      if (data.strategies && data.strategies.length > 0) {
-        setStrategies(data.strategies);
-        setSelectedStrategy(data.strategies[1]);
-      } else {
-        setError('No strategies found. Please ensure your Python backend is running and has data.');
-      }
-    } catch (error) {
-      console.error('Error fetching strategies:', error);
-      setError(`Cannot connect to backend API. Please ensure Python FastAPI server is running on port 8000. Error: ${error.message}`);
-      setLoading(false);
-    }
-  };
-
-  const fetchAllData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [summaryRes, performanceRes, transactionsRes, pnlRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/summary?dry_run=true`),
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/performance?dry_run=true&use_metrics=true`),
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/transactions?limit=200&dry_run=true`),
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/daily-pnl?dry_run=true`)
-      ]);
-
-      if (!summaryRes.ok) throw new Error('Failed to fetch summary');
-      if (!performanceRes.ok) throw new Error('Failed to fetch performance');
-      if (!transactionsRes.ok) throw new Error('Failed to fetch transactions');
-      if (!pnlRes.ok) throw new Error('Failed to fetch daily PnL');
-
-      const summaryData = await summaryRes.json();
-      const performanceData = await performanceRes.json();
-      const transactionsData = await transactionsRes.json();
-      const pnlData = await pnlRes.json();
-
-      setSummary(summaryData);
-      setPerformance(performanceData);
-      setTransactions(transactionsData);
-      
-      if (pnlData.daily_values) {
-        setDailyPnl(pnlData.daily_values.map(d => ({
-          date: d.trade_date,
-          value: d.total_value,
-          cash: d.cash_balance,
-          holdings: d.holdings_value
-        })));
-      }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      setError(`Error loading data: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStrategy]); // Only fetch when strategy changes, not when dates change
 
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('zh-CN', {
@@ -97,13 +211,13 @@ const QMTTradingDashboard = () => {
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
-  if (error) {
+  if (criticalError) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
         <div className="text-center max-w-md p-8 bg-white rounded-lg shadow-lg">
           <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-gray-900 mb-2">Connection Error</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
+          <p className="text-gray-600 mb-4">{criticalError}</p>
           <button 
             onClick={() => window.location.reload()} 
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -128,10 +242,13 @@ const QMTTradingDashboard = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Toast Notifications */}
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
+      
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-4">
               <h1 className="text-2xl font-bold text-gray-900">QMT Trading System</h1>
               <select
@@ -144,10 +261,42 @@ const QMTTradingDashboard = () => {
                 ))}
               </select>
             </div>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Clock className="w-4 h-4" />
-              <span>{summary?.date}</span>
-              <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">Dry Run</span>
+            
+            {/* Date Range Picker */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-gray-500" />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Start Date"
+                />
+                <span className="text-gray-500">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="End Date"
+                />
+              </div>
+              
+              <button
+                onClick={fetchAllData}
+                disabled={loading}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+              
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <Clock className="w-4 h-4" />
+                <span>{summary?.date}</span>
+                <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">Dry Run</span>
+              </div>
             </div>
           </div>
         </div>
@@ -261,45 +410,84 @@ const QMTTradingDashboard = () => {
         )}
 
         {/* Holdings Tab */}
-        {activeTab === 'holdings' && summary && (
-          <div className="bg-white rounded-lg border border-gray-200">
-            <div className="p-6 border-b border-gray-200">
-              <h3 className="text-lg font-semibold">Current Holdings</h3>
+        {activeTab === 'holdings' && (
+          Object.keys(holdingsHistory).length > 0 ? (
+            <div className="space-y-6">
+              {Object.entries(holdingsHistory)
+                .sort(([dateA], [dateB]) => dateB.localeCompare(dateA)) // Sort by date descending
+                .map(([date, holdings]) => {
+                  const totalValue = holdings.reduce((sum, h) => sum + h.market_value, 0);
+                  return (
+                    <div key={date} className="bg-white rounded-lg border border-gray-200">
+                      <div className="p-6 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-lg font-semibold">{date}</h3>
+                          <div className="text-sm text-gray-500">
+                            <span className="font-medium text-gray-900">{holdings.length}</span> position{holdings.length !== 1 ? 's' : ''} · 
+                            <span className="ml-2 font-medium text-gray-900">{formatCurrency(totalValue)}</span> total
+                          </div>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock Code</th>
+                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Market Value</th>
+                              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {holdings.map((holding, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50">
+                                <td className="px-6 py-4 text-sm font-medium text-gray-900">{holding.stock_code}</td>
+                                <td className="px-6 py-4 text-sm text-right text-gray-900">{holding.quantity.toFixed(0)}</td>
+                                <td className="px-6 py-4 text-sm text-right text-gray-900">{holding.price.toFixed(2)}</td>
+                                <td className="px-6 py-4 text-sm text-right text-gray-900">{formatCurrency(holding.market_value)}</td>
+                                <td className="px-6 py-4 text-sm text-right text-gray-900">
+                                  {((holding.market_value / totalValue) * 100).toFixed(2)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock Code</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Market Value</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Weight</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {summary.holdings.map((holding, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm font-medium text-gray-900">{holding.stock_code}</td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-900">{holding.quantity.toFixed(0)}</td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-900">{holding.price.toFixed(2)}</td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-900">{formatCurrency(holding.market_value)}</td>
-                      <td className="px-6 py-4 text-sm text-right text-gray-900">
-                        {((holding.market_value / summary.total_market_value) * 100).toFixed(2)}%
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          ) : (
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+              <PieChart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Holdings Data</h3>
+              <p className="text-gray-500">
+                {(startDate || endDate) 
+                  ? 'No holdings found in the selected date range. Try adjusting your filters.'
+                  : 'No holdings data available for this strategy yet.'
+                }
+              </p>
             </div>
-          </div>
+          )
         )}
 
         {/* Transactions Tab */}
-        {activeTab === 'transactions' && transactions.length > 0 && (
+        {activeTab === 'transactions' && (
+          transactions.length > 0 ? (
           <div className="bg-white rounded-lg border border-gray-200">
             <div className="p-6 border-b border-gray-200">
-              <h3 className="text-lg font-semibold">Recent Transactions</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Transactions</h3>
+                <div className="text-sm text-gray-500">
+                  <span className="font-medium text-gray-900">{transactions.length}</span> transaction{transactions.length !== 1 ? 's' : ''}
+                  {(startDate || endDate) && (
+                    <span className="ml-2">
+                      ({startDate || '...'} to {endDate || 'latest'})
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -321,7 +509,7 @@ const QMTTradingDashboard = () => {
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">{tx.code}</td>
                       <td className="px-6 py-4 text-sm">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          tx.action === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                          tx.action.toLowerCase() === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                         }`}>
                           {tx.action.toUpperCase()}
                         </span>
@@ -338,6 +526,18 @@ const QMTTradingDashboard = () => {
               </table>
             </div>
           </div>
+          ) : (
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+              <Activity className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No Transactions Found</h3>
+              <p className="text-gray-500">
+                {(startDate || endDate) 
+                  ? 'No transactions found in the selected date range. Try adjusting your filters.'
+                  : 'No transactions recorded for this strategy yet.'
+                }
+              </p>
+            </div>
+          )
         )}
 
         {/* Performance Tab */}

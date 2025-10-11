@@ -1,0 +1,39 @@
+---
+alwaysApply: true
+---
+
+
+## Backend API Endpoints
+
+### System
+
+- `GET /api/health` - Health check and system status
+
+### Strategies
+
+- `GET /api/strategies` - List all available strategies
+  - Query params: `dry_run` (bool)
+
+### Portfolio & Holdings
+
+- `GET /api/strategy/{strategy_name}/summary` - Get complete portfolio summary for a specific date
+  - Query params: `trade_date` (date), `dry_run` (bool)
+  
+- `GET /api/strategy/{strategy_name}/holdings` - Get holdings history
+  - Query params: `start_date` (date), `end_date` (date), `dry_run` (bool)
+  
+- `GET /api/strategy/{strategy_name}/cash` - Get cash balance history
+  - Query params: `start_date` (date), `end_date` (date), `dry_run` (bool)
+
+### Transactions
+
+- `GET /api/strategy/{strategy_name}/transactions` - Get transaction history
+  - Query params: `limit` (int), `dry_run` (bool)
+
+### Performance
+
+- `GET /api/strategy/{strategy_name}/performance` - Get comprehensive performance metrics
+  - Query params: `start_date` (date), `end_date` (date), `dry_run` (bool)
+  
+- `GET /api/strategy/{strategy_name}/daily-pnl` - Get daily PNL data
+  - Query params: `start_date` (date), `end_date` (date), `dry_run` (bool)
