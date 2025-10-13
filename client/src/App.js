@@ -60,10 +60,12 @@ const QMTTradingDashboard = () => {
   const [transactions, setTransactions] = useState([]);
   const [dailyPnl, setDailyPnl] = useState([]);
   const [holdingsHistory, setHoldingsHistory] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // Changed from true to false
   const [criticalError, setCriticalError] = useState(null); // Only for critical failures
   const [activeTab, setActiveTab] = useState('overview');
   const [toasts, setToasts] = useState([]);
+  const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
+  const [valueDisplayMode, setValueDisplayMode] = useState('absolute'); // 'absolute' or 'percentage'
   
   // Date range state
   const [startDate, setStartDate] = useState('');
@@ -99,23 +101,39 @@ const QMTTradingDashboard = () => {
   };
 
   const fetchAllData = useCallback(async () => {
+    if (!selectedStrategy) {
+      addToast('Please select a strategy first', 'error');
+      return;
+    }
+    
     setLoading(true);
+    setDataLoaded(true);
     
     try {
+      // Calculate default date range (100 days) if not specified
+      const today = new Date();
+      const defaultEndDate = today.toISOString().split('T')[0];
+      const default100DaysAgo = new Date(today.getTime() - 100 * 24 * 60 * 60 * 1000);
+      const defaultStartDate = default100DaysAgo.toISOString().split('T')[0];
+      
+      const effectiveStartDate = startDate || defaultStartDate;
+      const effectiveEndDate = endDate || defaultEndDate;
+      
       // Build query parameters with date range
       const dateParams = new URLSearchParams();
       dateParams.append('dry_run', 'true');
-      if (startDate) dateParams.append('start_date', startDate);
-      if (endDate) dateParams.append('end_date', endDate);
+      dateParams.append('start_date', effectiveStartDate);
+      dateParams.append('end_date', effectiveEndDate);
       
       const dateParamsStr = dateParams.toString();
       const summaryParams = new URLSearchParams({ dry_run: 'true' });
-      if (endDate) summaryParams.append('trade_date', endDate);
+      // Don't pass trade_date - let API use latest available
+      // if (effectiveEndDate) summaryParams.append('trade_date', effectiveEndDate);
       
       // Build transactions query parameters with date range
-      const transactionsParams = new URLSearchParams({ limit: '200', dry_run: 'true' });
-      if (startDate) transactionsParams.append('start_date', startDate);
-      if (endDate) transactionsParams.append('end_date', endDate);
+      const transactionsParams = new URLSearchParams({ limit: '1000', dry_run: 'true' });
+      transactionsParams.append('start_date', effectiveStartDate);
+      transactionsParams.append('end_date', effectiveEndDate);
       
       // Fetch all data with individual error handling
       const results = await Promise.allSettled([
@@ -138,16 +156,69 @@ const QMTTradingDashboard = () => {
       // Process performance
       if (results[1].status === 'fulfilled' && results[1].value.ok) {
         const performanceData = await results[1].value.json();
+        console.log('Performance data:', performanceData);
+        
+        // Debug total_trades issue
+        console.log('Total trades from API:', performanceData.total_trades);
+        
+        // Check if we need to calculate trades from transactions
+        if (!performanceData.total_trades && performanceData.total_trades !== 0) {
+          console.warn('Missing total_trades in API response - will calculate from transactions');
+        }
+        
+        if (performanceData.daily_performances && performanceData.daily_performances.length > 0) {
+          // Check for daily_cash_change data
+          const hasCashFlowData = performanceData.daily_performances.some(day => 
+            day.daily_cash_change !== undefined && day.daily_cash_change !== null
+          );
+          console.log('Has cash flow data:', hasCashFlowData);
+          if (!hasCashFlowData) {
+            console.warn('No daily_cash_change data found in API response');
+          }
+          console.log('Sample day data:', performanceData.daily_performances[0]);
+        }
         setPerformance(performanceData);
       } else {
         console.error('Failed to fetch performance:', results[1]);
         addToast('Failed to load performance metrics. Please try again.', 'error');
       }
 
-      // Process transactions
+      // Process transactions and update trade counts if needed
       if (results[2].status === 'fulfilled' && results[2].value.ok) {
         const transactionsData = await results[2].value.json();
         setTransactions(transactionsData);
+        
+        // Fix for total_trades showing as 0
+        // Check if we have transactions but performance data shows 0 trades
+        const performanceState = performance; // Get current performance state
+        if (performanceState && 
+            (!performanceState.total_trades || performanceState.total_trades === 0) && 
+            transactionsData && transactionsData.length > 0) {
+          
+          console.log('Calculating trade counts from transactions data');
+          
+          // Count the transactions
+          const totalTrades = transactionsData.length;
+          const buyTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'buy').length;
+          const sellTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'sell').length;
+          
+          // Create a new performance object with the trade counts
+          const updatedPerformanceData = {
+            ...performanceState,
+            total_trades: totalTrades,
+            buy_trades: buyTrades,
+            sell_trades: sellTrades
+          };
+          
+          console.log('Updated trade counts:', { 
+            total: totalTrades, 
+            buy: buyTrades, 
+            sell: sellTrades 
+          });
+          
+          // Update the state with corrected data
+          setPerformance(updatedPerformanceData);
+        }
       } else {
         console.error('Failed to fetch transactions:', results[2]);
         addToast('Failed to load transactions. Please try again.', 'error');
@@ -186,18 +257,18 @@ const QMTTradingDashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedStrategy, startDate, endDate, addToast]);
+  }, [selectedStrategy, startDate, endDate, addToast, performance]);
 
   useEffect(() => {
     fetchStrategies();
   }, []);
 
-  useEffect(() => {
-    if (selectedStrategy) {
-      fetchAllData();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStrategy]); // Only fetch when strategy changes, not when dates change
+  // Remove auto-fetch - user must click Refresh button
+  // useEffect(() => {
+  //   if (selectedStrategy) {
+  //     fetchAllData();
+  //   }
+  // }, [selectedStrategy]);
 
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('zh-CN', {
@@ -229,12 +300,90 @@ const QMTTradingDashboard = () => {
     );
   }
 
-  if (loading && !summary) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
         <div className="text-center">
           <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading trading data...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  // Show welcome message if no data loaded yet
+  if (!dataLoaded && !summary) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-6 py-4">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center gap-4">
+                <h1 className="text-2xl font-bold text-gray-900">QMT Trading System</h1>
+                <select
+                  value={selectedStrategy}
+                  onChange={(e) => setSelectedStrategy(e.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select a strategy...</option>
+                  {strategies.map(strategy => (
+                    <option key={strategy} value={strategy}>{strategy}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-gray-500" />
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Start Date"
+                  />
+                  <span className="text-gray-500">to</span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="End Date"
+                  />
+                </div>
+                
+                <button
+                  onClick={fetchAllData}
+                  disabled={!selectedStrategy}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Load Data</span>
+                </button>
+                
+                <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-sm">Dry Run</span>
+              </div>
+            </div>
+          </div>
+        </header>
+        
+        <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 100px)' }}>
+          <div className="text-center max-w-md p-8">
+            <Activity className="w-24 h-24 text-gray-300 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome to QMT Trading Dashboard</h2>
+            <p className="text-gray-600 mb-6">
+              Select a strategy and click "Load Data" to view your trading performance.
+            </p>
+            <p className="text-sm text-gray-500">
+              {!selectedStrategy && "👆 Start by selecting a strategy from the dropdown above"}
+              {selectedStrategy && `Selected: ${selectedStrategy}. Click "Load Data" to continue.`}
+            </p>
+            {!startDate && !endDate && (
+              <p className="text-sm text-gray-500 mt-2">
+                💡 Leave dates empty to load the last 100 days by default
+              </p>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -306,7 +455,7 @@ const QMTTradingDashboard = () => {
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6">
           <nav className="flex gap-8">
-            {['overview', 'performance', 'holdings', 'transactions'].map(tab => (
+            {['overview', 'holdings', 'transactions'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -357,55 +506,202 @@ const QMTTradingDashboard = () => {
 
             {/* Performance Metrics */}
             {performance && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div className="bg-white p-6 rounded-lg border border-gray-200">
-                  <p className="text-sm text-gray-500 mb-1">Total Return</p>
-                  <p className={`text-2xl font-bold ${performance.total_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatPercent(performance.total_return)}
-                  </p>
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Total Return</p>
+                    <p className={`text-2xl font-bold ${performance.total_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {formatPercent(performance.total_return)}
+                    </p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Total PNL</p>
+                    <p className={`text-2xl font-bold ${performance.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {formatCurrency(performance.total_pnl)}
+                    </p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Sharpe Ratio</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {performance.final_sharpe_ratio?.toFixed(2) || 'N/A'}
+                    </p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Max Drawdown</p>
+                    <p className="text-2xl font-bold text-red-600">
+                      {performance.max_drawdown ? (performance.max_drawdown * 100).toFixed(2) + '%' : 'N/A'}
+                    </p>
+                  </div>
                 </div>
-                <div className="bg-white p-6 rounded-lg border border-gray-200">
-                  <p className="text-sm text-gray-500 mb-1">Total PNL</p>
-                  <p className={`text-2xl font-bold ${performance.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatCurrency(performance.total_pnl)}
-                  </p>
+
+                {/* Additional Trading Metrics */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Total Trades</p>
+                    <p className="text-2xl font-bold text-gray-900">{performance.total_trades}</p>
+                    <div className="mt-2 text-sm text-gray-500">
+                      Buy: {performance.buy_trades} | Sell: {performance.sell_trades}
+                    </div>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Avg Daily Return</p>
+                    <p className={`text-2xl font-bold ${performance.avg_daily_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {performance.avg_daily_return !== null && performance.avg_daily_return !== undefined 
+                        ? `${(performance.avg_daily_return * 100).toFixed(3)}%`
+                        : 'N/A'}
+                    </p>
+                  </div>
+                  <div className="bg-white p-6 rounded-lg border border-gray-200">
+                    <p className="text-sm text-gray-500 mb-1">Volatility</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {performance.final_volatility?.toFixed(3) || 'N/A'}
+                    </p>
+                  </div>
                 </div>
-                <div className="bg-white p-6 rounded-lg border border-gray-200">
-                  <p className="text-sm text-gray-500 mb-1">Sharpe Ratio</p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {performance.final_sharpe_ratio?.toFixed(2) || 'N/A'}
-                  </p>
-                </div>
-                <div className="bg-white p-6 rounded-lg border border-gray-200">
-                  <p className="text-sm text-gray-500 mb-1">Max Drawdown</p>
-                  <p className="text-2xl font-bold text-red-600">
-                    {performance.max_drawdown ? (performance.max_drawdown * 100).toFixed(2) + '%' : 'N/A'}
-                  </p>
-                </div>
-              </div>
+              </>
             )}
 
-            {/* Portfolio Value Chart */}
-            {dailyPnl.length > 0 && (
-              <div className="bg-white p-6 rounded-lg border border-gray-200 mb-8">
-                <h3 className="text-lg font-semibold mb-4">Portfolio Value Trend</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={dailyPnl}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip 
-                      formatter={(value) => formatCurrency(value)}
-                      contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} name="Total Value" />
-                    <Line type="monotone" dataKey="cash" stroke="#10b981" strokeWidth={2} name="Cash" />
-                    <Line type="monotone" dataKey="holdings" stroke="#8b5cf6" strokeWidth={2} name="Holdings" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+            {/* Performance Charts Section */}
+            <div className="space-y-8">
+              {/* Portfolio Value Chart */}
+              {dailyPnl.length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-gray-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">Portfolio Value Trend</h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setValueDisplayMode('absolute')}
+                        className={`px-3 py-1 text-sm rounded-lg transition-colors ${
+                          valueDisplayMode === 'absolute'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        Absolute Value
+                      </button>
+                      <button
+                        onClick={() => setValueDisplayMode('percentage')}
+                        className={`px-3 py-1 text-sm rounded-lg transition-colors ${
+                          valueDisplayMode === 'percentage'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        Percentage Change
+                      </button>
+                    </div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={dailyPnl.map((d, idx) => {
+                      if (valueDisplayMode === 'percentage') {
+                        if (idx === 0) {
+                          // First data point is always 0% (reference point)
+                          return { ...d, displayValue: 0 };
+                        } else {
+                          const initialValue = dailyPnl[0].value;
+                          const percentageChange = ((d.value - initialValue) / initialValue) * 100;
+                          return { ...d, displayValue: percentageChange };
+                        }
+                      }
+                      return { ...d, displayValue: d.value };
+                    })}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} />
+                      <Tooltip 
+                        formatter={(value) => 
+                          valueDisplayMode === 'percentage' 
+                            ? `${value.toFixed(2)}%` 
+                            : formatCurrency(value)
+                        }
+                        contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
+                      />
+                      <Legend />
+                      <Line 
+                        type="monotone" 
+                        dataKey="displayValue" 
+                        stroke="#3b82f6" 
+                        strokeWidth={2} 
+                        name={valueDisplayMode === 'percentage' ? 'Return (%)' : 'Total Value (¥)'} 
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Daily Returns Chart */}
+              {performance?.daily_performances && performance.daily_performances.length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-gray-200">
+                  <h3 className="text-lg font-semibold mb-4">Daily Returns</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={performance.daily_performances.slice(-30).map(d => ({
+                      ...d,
+                      daily_return_pct: d.daily_return ? d.daily_return * 100 : null
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="trade_date" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
+                      <Tooltip 
+                        formatter={(value) => value?.toFixed(3) + '%'}
+                        contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
+                      />
+                      <Bar dataKey="daily_return_pct" fill="#3b82f6" name="Daily Return (%)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              
+              {/* Daily Cash Flow Chart */}
+              {performance?.daily_performances && performance.daily_performances.length > 0 && (
+                <div className="bg-white p-6 rounded-lg border border-gray-200">
+                  <h3 className="text-lg font-semibold mb-4">Daily Cash Flow</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart 
+                      data={performance.daily_performances
+                        .slice(-30)
+                        .map((day, index, array) => {
+                          // Use the daily_cash_change if available
+                          if (day.daily_cash_change !== undefined && day.daily_cash_change !== null) {
+                            return {
+                              ...day,
+                              calculatedCashChange: day.daily_cash_change
+                            };
+                          }
+                          
+                          // Otherwise calculate it from daily cash values (if we have previous day data)
+                          if (index > 0) {
+                            const prevDayCash = array[index - 1].cash;
+                            const cashChange = day.cash - prevDayCash;
+                            return {
+                              ...day,
+                              calculatedCashChange: cashChange
+                            };
+                          }
+                          
+                          // For the first day with no reference, show no change
+                          return {
+                            ...day,
+                            calculatedCashChange: 0
+                          };
+                        })
+                      }
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="trade_date" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} />
+                      <Tooltip 
+                        formatter={(value) => formatCurrency(value || 0)}
+                        contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
+                      />
+                      <Bar dataKey="calculatedCashChange" fill="#10b981" name="Cash Change (¥)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <p className="text-sm text-gray-500 mt-4">
+                    Positive values indicate cash inflows (from selling or deposits), negative values indicate outflows (from buying).
+                  </p>
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -414,9 +710,14 @@ const QMTTradingDashboard = () => {
           Object.keys(holdingsHistory).length > 0 ? (
             <div className="space-y-6">
               {Object.entries(holdingsHistory)
-                .sort(([dateA], [dateB]) => dateB.localeCompare(dateA)) // Sort by date descending
+                .sort(([dateA], [dateB]) => dateA.localeCompare(dateB)) // Sort by date ascending
                 .map(([date, holdings]) => {
-                  const totalValue = holdings.reduce((sum, h) => sum + h.market_value, 0);
+                  const holdingsValue = holdings.reduce((sum, h) => sum + h.market_value, 0);
+                  // Get cash from dailyPnl for this date
+                  const dayData = dailyPnl.find(d => d.date === date);
+                  const cashBalance = dayData ? dayData.cash : 0;
+                  const totalValue = holdingsValue + cashBalance;
+                  
                   return (
                     <div key={date} className="bg-white rounded-lg border border-gray-200">
                       <div className="p-6 border-b border-gray-200">
@@ -451,6 +752,24 @@ const QMTTradingDashboard = () => {
                                 </td>
                               </tr>
                             ))}
+                            {/* Cash Row */}
+                            <tr className="bg-green-50 hover:bg-green-100 font-medium">
+                              <td className="px-6 py-4 text-sm font-bold text-gray-900">CASH</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">-</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">-</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">{formatCurrency(cashBalance)}</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">
+                                {((cashBalance / totalValue) * 100).toFixed(2)}%
+                              </td>
+                            </tr>
+                            {/* Total Row */}
+                            <tr className="bg-blue-50 font-bold">
+                              <td className="px-6 py-4 text-sm font-bold text-gray-900">TOTAL</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">-</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">-</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">{formatCurrency(totalValue)}</td>
+                              <td className="px-6 py-4 text-sm text-right text-gray-900">100.00%</td>
+                            </tr>
                           </tbody>
                         </table>
                       </div>
@@ -475,17 +794,37 @@ const QMTTradingDashboard = () => {
         {/* Transactions Tab */}
         {activeTab === 'transactions' && (
           transactions.length > 0 ? (
-          <div className="bg-white rounded-lg border border-gray-200">
+          <div className="space-y-6">
+            {/* Group transactions by date */}
+            {Object.entries(
+              transactions.reduce((groups, tx) => {
+                const date = tx.trade_date;
+                if (!groups[date]) groups[date] = [];
+                groups[date].push(tx);
+                return groups;
+              }, {})
+            )
+              .sort(([dateA], [dateB]) => dateA.localeCompare(dateB)) // Sort dates ascending
+              .map(([date, dayTransactions]) => {
+                const totalAmount = dayTransactions.reduce((sum, tx) => 
+                  sum + (tx.action.toLowerCase() === 'buy' ? -tx.net_amount : tx.net_amount), 0
+                );
+                const buyCount = dayTransactions.filter(tx => tx.action.toLowerCase() === 'buy').length;
+                const sellCount = dayTransactions.filter(tx => tx.action.toLowerCase() === 'sell').length;
+                
+                return (
+                  <div key={date} className="bg-white rounded-lg border border-gray-200">
             <div className="p-6 border-b border-gray-200">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Transactions</h3>
+                        <h3 className="text-lg font-semibold">{date}</h3>
                 <div className="text-sm text-gray-500">
-                  <span className="font-medium text-gray-900">{transactions.length}</span> transaction{transactions.length !== 1 ? 's' : ''}
-                  {(startDate || endDate) && (
+                          <span className="font-medium text-gray-900">{dayTransactions.length}</span> transaction{dayTransactions.length !== 1 ? 's' : ''} · 
                     <span className="ml-2">
-                      ({startDate || '...'} to {endDate || 'latest'})
+                            <span className="text-green-700">{buyCount} buy</span> / <span className="text-red-700">{sellCount} sell</span>
+                          </span> · 
+                          <span className={`ml-2 font-medium ${totalAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            Net: {formatCurrency(totalAmount)}
                     </span>
-                  )}
                 </div>
               </div>
             </div>
@@ -493,19 +832,22 @@ const QMTTradingDashboard = () => {
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Commission</th>
+                            <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Net Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {transactions.map((tx) => (
+                          {dayTransactions
+                            .sort((a, b) => a.execution_time - b.execution_time) // Sort by time ascending
+                            .map((tx) => (
                     <tr key={tx.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">{tx.execution_datetime}</td>
+                              <td className="px-6 py-4 text-sm text-gray-600">{tx.execution_datetime.split(' ')[1]}</td>
                       <td className="px-6 py-4 text-sm font-medium text-gray-900">{tx.code}</td>
                       <td className="px-6 py-4 text-sm">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -520,11 +862,19 @@ const QMTTradingDashboard = () => {
                       <td className="px-6 py-4 text-sm text-right text-gray-500">
                         {tx.commission ? formatCurrency(tx.commission) : '-'}
                       </td>
+                              <td className={`px-6 py-4 text-sm text-right font-medium ${
+                                tx.action.toLowerCase() === 'buy' ? 'text-red-600' : 'text-green-600'
+                              }`}>
+                                {tx.action.toLowerCase() === 'buy' ? '-' : '+'}{formatCurrency(tx.net_amount)}
+                              </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+                  </div>
+                );
+              })}
           </div>
           ) : (
             <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
@@ -540,50 +890,6 @@ const QMTTradingDashboard = () => {
           )
         )}
 
-        {/* Performance Tab */}
-        {activeTab === 'performance' && performance && (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              <div className="bg-white p-6 rounded-lg border border-gray-200">
-                <p className="text-sm text-gray-500 mb-1">Total Trades</p>
-                <p className="text-3xl font-bold text-gray-900">{performance.total_trades}</p>
-                <div className="mt-2 text-sm text-gray-500">
-                  Buy: {performance.buy_trades} | Sell: {performance.sell_trades}
-                </div>
-              </div>
-              <div className="bg-white p-6 rounded-lg border border-gray-200">
-                <p className="text-sm text-gray-500 mb-1">Avg Daily Return</p>
-                <p className="text-3xl font-bold text-gray-900">
-                  {performance.avg_daily_return?.toFixed(3)}%
-                </p>
-              </div>
-              <div className="bg-white p-6 rounded-lg border border-gray-200">
-                <p className="text-sm text-gray-500 mb-1">Volatility</p>
-                <p className="text-3xl font-bold text-gray-900">
-                  {performance.final_volatility?.toFixed(3) || 'N/A'}
-                </p>
-              </div>
-            </div>
-
-            {performance.daily_performances && performance.daily_performances.length > 0 && (
-              <div className="bg-white p-6 rounded-lg border border-gray-200">
-                <h3 className="text-lg font-semibold mb-4">Daily Returns</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={performance.daily_performances.slice(-30)}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="trade_date" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip 
-                      formatter={(value) => value?.toFixed(2) + '%'}
-                      contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
-                    />
-                    <Bar dataKey="daily_return" fill="#3b82f6" name="Daily Return (%)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </>
-        )}
       </div>
     </div>
   );
