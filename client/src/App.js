@@ -1,56 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw, X, CheckCircle, XCircle } from 'lucide-react';
+import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
+import { ToastContainer } from './components/Toast';
+import { MetricCard } from './components/MetricCard';
+import { MetricsGrid } from './components/MetricsGrid';
 
 const API_BASE_URL = '/api';
-
-// Toast Notification Component
-const Toast = ({ message, type = 'error', onClose }) => {
-  const bgColor = type === 'error' ? 'bg-red-50 border-red-200' : type === 'success' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200';
-  const textColor = type === 'error' ? 'text-red-800' : type === 'success' ? 'text-green-800' : 'text-blue-800';
-  const Icon = type === 'error' ? XCircle : type === 'success' ? CheckCircle : AlertCircle;
-  
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      onClose();
-    }, 5000); // Auto-dismiss after 5 seconds
-    
-    return () => clearTimeout(timer);
-  }, [onClose]);
-  
-  return (
-    <div className={`flex items-start gap-3 p-4 mb-3 rounded-lg border ${bgColor} ${textColor} shadow-lg animate-slideIn`}>
-      <Icon className="w-5 h-5 flex-shrink-0 mt-0.5" />
-      <div className="flex-1">
-        <p className="text-sm font-medium">{message}</p>
-      </div>
-      <button 
-        onClick={onClose}
-        className="flex-shrink-0 hover:opacity-70 transition-opacity"
-      >
-        <X className="w-4 h-4" />
-      </button>
-    </div>
-  );
-};
-
-// Toast Container Component
-const ToastContainer = ({ toasts, removeToast }) => {
-  if (toasts.length === 0) return null;
-  
-  return (
-    <div className="fixed top-4 right-4 z-50 w-96 max-w-full">
-      {toasts.map(toast => (
-        <Toast 
-          key={toast.id} 
-          message={toast.message} 
-          type={toast.type}
-          onClose={() => removeToast(toast.id)}
-        />
-      ))}
-    </div>
-  );
-};
 
 const QMTTradingDashboard = () => {
   const [strategies, setStrategies] = useState([]);
@@ -65,7 +20,12 @@ const QMTTradingDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [toasts, setToasts] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
-  const [valueDisplayMode, setValueDisplayMode] = useState('absolute'); // 'absolute' or 'percentage'
+  const [valueDisplayMode, setValueDisplayMode] = useState('percentage'); // 'absolute' or 'percentage'
+  
+  // Benchmark state
+  const [benchmarks, setBenchmarks] = useState([]);
+  const [selectedBenchmark, setSelectedBenchmark] = useState('');
+  const [benchmarkData, setBenchmarkData] = useState(null);
   
   // Date range state
   const [startDate, setStartDate] = useState('');
@@ -100,9 +60,33 @@ const QMTTradingDashboard = () => {
     }
   };
 
+  const fetchBenchmarks = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/benchmarks`);
+      if (!response.ok) throw new Error('Failed to fetch benchmarks');
+      const data = await response.json();
+      if (data.benchmarks && data.benchmarks.length > 0) {
+        setBenchmarks(data.benchmarks);
+        // Set default to first benchmark (沪深300)
+        setSelectedBenchmark(data.benchmarks[0].code);
+      }
+    } catch (error) {
+      console.error('Error fetching benchmarks:', error);
+      addToast('Failed to load benchmark list. Using default.', 'error');
+      // Set default fallback
+      setBenchmarks([{ name: '沪深300', code: '000300.SH' }]);
+      setSelectedBenchmark('000300.SH');
+    }
+  };
+
   const fetchAllData = useCallback(async () => {
     if (!selectedStrategy) {
       addToast('Please select a strategy first', 'error');
+      return;
+    }
+    
+    if (!selectedBenchmark) {
+      addToast('Loading benchmark data...', 'info');
       return;
     }
     
@@ -135,13 +119,19 @@ const QMTTradingDashboard = () => {
       transactionsParams.append('start_date', effectiveStartDate);
       transactionsParams.append('end_date', effectiveEndDate);
       
-      // Fetch all data with individual error handling
+      // Fetch all data with individual error handling (including benchmark)
+      const benchmarkRangeParams = new URLSearchParams({
+        start_date: effectiveStartDate,
+        end_date: effectiveEndDate
+      });
+      
       const results = await Promise.allSettled([
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/summary?${summaryParams.toString()}`),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/performance?${dateParamsStr}&use_metrics=true`),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/transactions?${transactionsParams.toString()}`),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/daily-pnl?${dateParamsStr}`),
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/holdings?${dateParamsStr}`)
+        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/holdings?${dateParamsStr}`),
+        fetch(`${API_BASE_URL}/benchmark/${selectedBenchmark}/range?${benchmarkRangeParams.toString()}`)
       ]);
 
       // Process summary
@@ -250,6 +240,17 @@ const QMTTradingDashboard = () => {
         console.error('Failed to fetch holdings history:', results[4]);
         addToast('Failed to load holdings history. Please try again.', 'error');
       }
+
+      // Process benchmark data
+      if (results[5].status === 'fulfilled' && results[5].value.ok) {
+        const benchData = await results[5].value.json();
+        console.log('Benchmark data loaded:', benchData);
+        setBenchmarkData(benchData);
+      } else {
+        console.error('Failed to fetch benchmark data:', results[5]);
+        addToast('Failed to load benchmark data. Chart will show strategy only.', 'error');
+        setBenchmarkData(null);
+      }
       
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -257,10 +258,12 @@ const QMTTradingDashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedStrategy, startDate, endDate, addToast, performance]);
+  }, [selectedStrategy, selectedBenchmark, startDate, endDate, addToast, performance]);
 
   useEffect(() => {
     fetchStrategies();
+    fetchBenchmarks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Remove auto-fetch - user must click Refresh button
@@ -333,6 +336,23 @@ const QMTTradingDashboard = () => {
               </div>
               
               <div className="flex items-center gap-3">
+                {/* Benchmark Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">基准:</span>
+                  <select
+                    value={selectedBenchmark}
+                    onChange={(e) => setSelectedBenchmark(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!benchmarks.length}
+                  >
+                    {benchmarks.map(benchmark => (
+                      <option key={benchmark.code} value={benchmark.code}>
+                        {benchmark.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-gray-500" />
                   <input
@@ -411,8 +431,25 @@ const QMTTradingDashboard = () => {
               </select>
             </div>
             
-            {/* Date Range Picker */}
+            {/* Date Range Picker & Controls */}
             <div className="flex items-center gap-3">
+              {/* Benchmark Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">基准:</span>
+                <select
+                  value={selectedBenchmark}
+                  onChange={(e) => setSelectedBenchmark(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={!benchmarks.length}
+                >
+                  {benchmarks.map(benchmark => (
+                    <option key={benchmark.code} value={benchmark.code}>
+                      {benchmark.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
               <div className="flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-gray-500" />
                 <input
@@ -476,6 +513,9 @@ const QMTTradingDashboard = () => {
         {/* Overview Tab */}
         {activeTab === 'overview' && summary && (
           <>
+            {/* Compact Metrics Grid (Like JoinQuant) */}
+            {performance && <MetricsGrid performance={performance} benchmarkData={benchmarkData} transactions={transactions} />}
+            
             {/* Key Metrics Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
               <MetricCard
@@ -563,11 +603,11 @@ const QMTTradingDashboard = () => {
 
             {/* Performance Charts Section */}
             <div className="space-y-8">
-              {/* Portfolio Value Chart */}
+              {/* Portfolio Value Chart with Benchmark */}
               {dailyPnl.length > 0 && (
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold">Portfolio Value Trend</h3>
+                    <h3 className="text-lg font-semibold">收益曲线 (Portfolio Value Trend)</h3>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setValueDisplayMode('absolute')}
@@ -591,41 +631,120 @@ const QMTTradingDashboard = () => {
                       </button>
                     </div>
                   </div>
-                  <ResponsiveContainer width="100%" height={300}>
+                  <ResponsiveContainer width="100%" height={350}>
                     <LineChart data={dailyPnl.map((d, idx) => {
+                      let strategyValue = d.value;
+                      let benchmarkValue = 0;
+                      
+                      // Create a date-aligned benchmark data map
+                      const benchmarkMap = {};
+                      if (benchmarkData && benchmarkData.data) {
+                        benchmarkData.data.forEach(b => {
+                          benchmarkMap[b.trade_date] = parseFloat(b.daily_return || 0);
+                        });
+                      }
+                      
                       if (valueDisplayMode === 'percentage') {
                         if (idx === 0) {
-                          // First data point is always 0% (reference point)
-                          return { ...d, displayValue: 0 };
+                          strategyValue = 0;
+                          benchmarkValue = 0;
                         } else {
                           const initialValue = dailyPnl[0].value;
-                          const percentageChange = ((d.value - initialValue) / initialValue) * 100;
-                          return { ...d, displayValue: percentageChange };
+                          strategyValue = ((d.value - initialValue) / initialValue) * 100;
+                          
+                          // Calculate benchmark percentage with date alignment and forward filling
+                          if (benchmarkData && benchmarkData.data) {
+                            let benchCumulativeReturn = 0;
+                            let lastKnownReturn = 0;
+                            
+                            for (let i = 0; i <= idx; i++) {
+                              const date = dailyPnl[i].date;
+                              if (benchmarkMap[date] !== undefined) {
+                                lastKnownReturn = benchmarkMap[date];
+                                benchCumulativeReturn += lastKnownReturn;
+                              } else {
+                                // Forward fill - use last known return (0 if first day)
+                                benchCumulativeReturn += lastKnownReturn;
+                              }
+                            }
+                            benchmarkValue = benchCumulativeReturn * 100;
+                          }
+                        }
+                      } else {
+                        // For absolute value, show benchmark as cumulative return percentage overlay
+                        if (benchmarkData && benchmarkData.data) {
+                          let benchCumulativeReturn = 0;
+                          let lastKnownReturn = 0;
+                          
+                          for (let i = 0; i <= idx; i++) {
+                            const date = dailyPnl[i].date;
+                            if (benchmarkMap[date] !== undefined) {
+                              lastKnownReturn = benchmarkMap[date];
+                              benchCumulativeReturn += lastKnownReturn;
+                            } else {
+                              // Forward fill
+                              benchCumulativeReturn += lastKnownReturn;
+                            }
+                          }
+                          benchmarkValue = benchCumulativeReturn * 100;
                         }
                       }
-                      return { ...d, displayValue: d.value };
+                      
+                      return { 
+                        ...d, 
+                        strategyValue, 
+                        benchmarkValue,
+                        hasBenchmark: !!benchmarkData 
+                      };
                     })}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                       <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                       <YAxis tick={{ fontSize: 12 }} />
                       <Tooltip 
-                        formatter={(value) => 
-                          valueDisplayMode === 'percentage' 
+                        formatter={(value, name) => {
+                          if (name.includes('Benchmark')) {
+                            return `${value.toFixed(2)}%`;
+                          }
+                          return valueDisplayMode === 'percentage' 
                             ? `${value.toFixed(2)}%` 
-                            : formatCurrency(value)
-                        }
+                            : formatCurrency(value);
+                        }}
                         contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
                       />
                       <Legend />
                       <Line 
                         type="monotone" 
-                        dataKey="displayValue" 
+                        dataKey="strategyValue" 
                         stroke="#3b82f6" 
                         strokeWidth={2} 
-                        name={valueDisplayMode === 'percentage' ? 'Return (%)' : 'Total Value (¥)'} 
+                        name={valueDisplayMode === 'percentage' ? '策略收益 Strategy Return (%)' : '策略价值 Total Value (¥)'} 
+                        dot={false}
                       />
+                      {benchmarkData && (
+                        <Line 
+                          type="monotone" 
+                          dataKey="benchmarkValue" 
+                          stroke="#ef4444" 
+                          strokeWidth={2} 
+                          name="基准收益 Benchmark Return (%)" 
+                          dot={false}
+                          strokeDasharray="5 5"
+                        />
+                      )}
                     </LineChart>
                   </ResponsiveContainer>
+                  {benchmarkData && (
+                    <div className="mt-3 text-sm text-gray-600 flex items-center justify-center gap-4">
+                      <span className="flex items-center gap-2">
+                        <span className="w-4 h-0.5 bg-blue-600"></span>
+                        策略 Strategy
+                      </span>
+                      <span className="flex items-center gap-2">
+                        <span className="w-4 h-0.5 bg-red-500" style={{backgroundImage: 'repeating-linear-gradient(to right, #ef4444 0, #ef4444 3px, transparent 3px, transparent 8px)'}}></span>
+                        基准 Benchmark: {benchmarks.find(b => b.code === selectedBenchmark)?.name}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -891,27 +1010,6 @@ const QMTTradingDashboard = () => {
         )}
 
       </div>
-    </div>
-  );
-};
-
-const MetricCard = ({ title, value, icon, color }) => {
-  const colorClasses = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    purple: 'bg-purple-50 text-purple-600',
-    orange: 'bg-orange-50 text-orange-600'
-  };
-
-  return (
-    <div className="bg-white p-6 rounded-lg border border-gray-200">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-sm text-gray-500">{title}</p>
-        <div className={`p-2 rounded-lg ${colorClasses[color]}`}>
-          {icon}
-        </div>
-      </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
     </div>
   );
 };
