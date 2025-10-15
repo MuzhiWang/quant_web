@@ -4,6 +4,7 @@ import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calenda
 import { ToastContainer } from './components/Toast';
 import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
+import { calculateAllMetrics } from './metric_utils';
 
 const API_BASE_URL = '/api';
 
@@ -245,6 +246,13 @@ const QMTTradingDashboard = () => {
       if (results[5].status === 'fulfilled' && results[5].value.ok) {
         const benchData = await results[5].value.json();
         console.log('Benchmark data loaded:', benchData);
+        console.log('Benchmark data structure:', {
+          hasData: !!benchData.data,
+          dataLength: benchData.data?.length || 0,
+          sampleData: benchData.data?.[0] || null,
+          benchmarkCode: benchData.benchmark_code,
+          benchmarkName: benchData.benchmark_name
+        });
         setBenchmarkData(benchData);
       } else {
         console.error('Failed to fetch benchmark data:', results[5]);
@@ -569,7 +577,10 @@ const QMTTradingDashboard = () => {
                   <div className="bg-white p-6 rounded-lg border border-gray-200">
                     <p className="text-sm text-gray-500 mb-1">Max Drawdown</p>
                     <p className="text-2xl font-bold text-red-600">
-                      {performance.max_drawdown ? (performance.max_drawdown * 100).toFixed(2) + '%' : 'N/A'}
+                      {(() => {
+                        const metrics = calculateAllMetrics(performance, benchmarkData, transactions);
+                        return metrics.maxDrawdown ? (metrics.maxDrawdown * 100).toFixed(2) + '%' : 'N/A';
+                      })()}
                     </p>
                   </div>
                 </div>
@@ -604,7 +615,13 @@ const QMTTradingDashboard = () => {
             {/* Performance Charts Section */}
             <div className="space-y-8">
               {/* Portfolio Value Chart with Benchmark */}
-              {dailyPnl.length > 0 && (
+              {dailyPnl.length > 0 && (() => {
+                // Calculate max drawdown dates
+                const metrics = calculateAllMetrics(performance, benchmarkData, transactions);
+                const maxDDPeakDate = metrics.maxDrawdownPeakDate;
+                const maxDDTroughDate = metrics.maxDrawdownTroughDate;
+                
+                return (
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold">收益曲线 (Portfolio Value Trend)</h3>
@@ -636,12 +653,31 @@ const QMTTradingDashboard = () => {
                       let strategyValue = d.value;
                       let benchmarkValue = 0;
                       
-                      // Create a date-aligned benchmark data map
+                      // Create a date-aligned benchmark data map with close prices
                       const benchmarkMap = {};
                       if (benchmarkData && benchmarkData.data) {
                         benchmarkData.data.forEach(b => {
-                          benchmarkMap[b.trade_date] = parseFloat(b.daily_return || 0);
+                          benchmarkMap[b.date] = {
+                            close: parseFloat(b.close || 0),
+                            daily_return: parseFloat(b.daily_return || 0)
+                          };
                         });
+                        // Debug: log benchmark map for first few dates
+                        if (idx === 0) {
+                          console.log('Benchmark map created:', Object.keys(benchmarkMap).slice(0, 5));
+                          console.log('Daily PnL dates:', dailyPnl.slice(0, 5).map(d => d.date));
+                          console.log('Sample benchmark data:', benchmarkData.data.slice(0, 3));
+                          
+                          // Debug first benchmark calculation
+                          const firstDate = dailyPnl[0].date;
+                          const firstBenchmark = benchmarkMap[firstDate];
+                          console.log('First benchmark calculation:', {
+                            date: firstDate,
+                            firstBenchmark,
+                            firstClose: firstBenchmark?.close,
+                            calculation: firstBenchmark ? '((current_close - first_close) / first_close) * 100' : 'No benchmark data'
+                          });
+                        }
                       }
                       
                       if (valueDisplayMode === 'percentage') {
@@ -652,49 +688,89 @@ const QMTTradingDashboard = () => {
                           const initialValue = dailyPnl[0].value;
                           strategyValue = ((d.value - initialValue) / initialValue) * 100;
                           
-                          // Calculate benchmark percentage with date alignment and forward filling
+                          // Calculate benchmark percentage change from day 1 using absolute close prices
                           if (benchmarkData && benchmarkData.data) {
-                            let benchCumulativeReturn = 0;
-                            let lastKnownReturn = 0;
+                            // Find the first benchmark close price (day 1 equivalent)
+                            const firstBenchmarkDate = dailyPnl[0].date;
+                            const firstBenchmarkData = benchmarkMap[firstBenchmarkDate];
                             
-                            for (let i = 0; i <= idx; i++) {
-                              const date = dailyPnl[i].date;
-                              if (benchmarkMap[date] !== undefined) {
-                                lastKnownReturn = benchmarkMap[date];
-                                benchCumulativeReturn += lastKnownReturn;
+                            if (firstBenchmarkData && firstBenchmarkData.close > 0) {
+                              const currentDate = d.date;
+                              const currentBenchmarkData = benchmarkMap[currentDate];
+                              
+                              if (currentBenchmarkData && currentBenchmarkData.close > 0) {
+                                // Calculate percentage change from day 1: (current_close - day1_close) / day1_close * 100
+                                benchmarkValue = ((currentBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
                               } else {
-                                // Forward fill - use last known return (0 if first day)
-                                benchCumulativeReturn += lastKnownReturn;
+                                // Forward fill: use previous day's benchmark value (not recalculate from day 1)
+                                if (idx > 0) {
+                                  // Find the most recent previous day that has benchmark data
+                                  let prevBenchmarkValue = 0;
+                                  for (let i = idx - 1; i >= 0; i--) {
+                                    const prevDate = dailyPnl[i].date;
+                                    const prevBenchmarkData = benchmarkMap[prevDate];
+                                    if (prevBenchmarkData && prevBenchmarkData.close > 0) {
+                                      // Calculate the previous day's benchmark value from day 1
+                                      prevBenchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
+                                      // Debug: log forward fill
+                                      if (idx <= 3) {
+                                        console.log(`Forward fill for ${currentDate}: using ${prevDate} value ${prevBenchmarkValue.toFixed(2)}%`);
+                                      }
+                                      break;
+                                    }
+                                  }
+                                  benchmarkValue = prevBenchmarkValue;
+                                }
                               }
                             }
-                            benchmarkValue = benchCumulativeReturn * 100;
                           }
                         }
                       } else {
                         // For absolute value, show benchmark as cumulative return percentage overlay
                         if (benchmarkData && benchmarkData.data) {
-                          let benchCumulativeReturn = 0;
-                          let lastKnownReturn = 0;
+                          // Find the first benchmark close price (day 1 equivalent)
+                          const firstBenchmarkDate = dailyPnl[0].date;
+                          const firstBenchmarkData = benchmarkMap[firstBenchmarkDate];
                           
-                          for (let i = 0; i <= idx; i++) {
-                            const date = dailyPnl[i].date;
-                            if (benchmarkMap[date] !== undefined) {
-                              lastKnownReturn = benchmarkMap[date];
-                              benchCumulativeReturn += lastKnownReturn;
+                          if (firstBenchmarkData && firstBenchmarkData.close > 0) {
+                            const currentDate = d.date;
+                            const currentBenchmarkData = benchmarkMap[currentDate];
+                            
+                            if (currentBenchmarkData && currentBenchmarkData.close > 0) {
+                              // Calculate percentage change from day 1: (current_close - day1_close) / day1_close * 100
+                              benchmarkValue = ((currentBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
                             } else {
-                              // Forward fill
-                              benchCumulativeReturn += lastKnownReturn;
+                              // Forward fill: use previous day's benchmark value (not recalculate from day 1)
+                              if (idx > 0) {
+                                // Find the most recent previous day that has benchmark data
+                                let prevBenchmarkValue = 0;
+                                for (let i = idx - 1; i >= 0; i--) {
+                                  const prevDate = dailyPnl[i].date;
+                                  const prevBenchmarkData = benchmarkMap[prevDate];
+                                  if (prevBenchmarkData && prevBenchmarkData.close > 0) {
+                                    // Calculate the previous day's benchmark value from day 1
+                                    prevBenchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
+                                    break;
+                                  }
+                                }
+                                benchmarkValue = prevBenchmarkValue;
+                              }
                             }
                           }
-                          benchmarkValue = benchCumulativeReturn * 100;
                         }
                       }
+                      
+                      // Mark max drawdown dates
+                      const isMaxDDPeak = d.date === maxDDPeakDate;
+                      const isMaxDDTrough = d.date === maxDDTroughDate;
                       
                       return { 
                         ...d, 
                         strategyValue, 
                         benchmarkValue,
-                        hasBenchmark: !!benchmarkData 
+                        hasBenchmark: !!benchmarkData,
+                        isMaxDDPeak,
+                        isMaxDDTrough
                       };
                     })}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -709,7 +785,28 @@ const QMTTradingDashboard = () => {
                             ? `${value.toFixed(2)}%` 
                             : formatCurrency(value);
                         }}
-                        contentStyle={{ backgroundColor: 'white', border: '1px solid #e5e7eb' }}
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            return (
+                              <div style={{ backgroundColor: 'white', border: '1px solid #e5e7eb', padding: '10px', borderRadius: '4px' }}>
+                                <p style={{ margin: '0 0 5px 0', fontWeight: 'bold' }}>{data.date}</p>
+                                {payload.map((entry, index) => (
+                                  <p key={index} style={{ margin: '2px 0', color: entry.color }}>
+                                    {entry.name}: {entry.name.includes('Benchmark') ? `${entry.value.toFixed(2)}%` : (valueDisplayMode === 'percentage' ? `${entry.value.toFixed(2)}%` : formatCurrency(entry.value))}
+                                  </p>
+                                ))}
+                                {data.isMaxDDPeak && (
+                                  <p style={{ margin: '5px 0 0 0', color: '#ef4444', fontWeight: 'bold' }}>📈 最大回撤起点 (Peak)</p>
+                                )}
+                                {data.isMaxDDTrough && (
+                                  <p style={{ margin: '5px 0 0 0', color: '#ef4444', fontWeight: 'bold' }}>📉 最大回撤终点 (Trough)</p>
+                                )}
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
                       />
                       <Legend />
                       <Line 
@@ -718,7 +815,34 @@ const QMTTradingDashboard = () => {
                         stroke="#3b82f6" 
                         strokeWidth={2} 
                         name={valueDisplayMode === 'percentage' ? '策略收益 Strategy Return (%)' : '策略价值 Total Value (¥)'} 
-                        dot={false}
+                        dot={(props) => {
+                          const { cx, cy, payload } = props;
+                          if (payload.isMaxDDPeak) {
+                            return (
+                              <circle
+                                cx={cx}
+                                cy={cy}
+                                r={6}
+                                fill="#ef4444"
+                                stroke="#dc2626"
+                                strokeWidth={2}
+                              />
+                            );
+                          }
+                          if (payload.isMaxDDTrough) {
+                            return (
+                              <circle
+                                cx={cx}
+                                cy={cy}
+                                r={6}
+                                fill="#f59e0b"
+                                stroke="#d97706"
+                                strokeWidth={2}
+                              />
+                            );
+                          }
+                          return null;
+                        }}
                       />
                       {benchmarkData && (
                         <Line 
@@ -733,20 +857,33 @@ const QMTTradingDashboard = () => {
                       )}
                     </LineChart>
                   </ResponsiveContainer>
-                  {benchmarkData && (
-                    <div className="mt-3 text-sm text-gray-600 flex items-center justify-center gap-4">
-                      <span className="flex items-center gap-2">
-                        <span className="w-4 h-0.5 bg-blue-600"></span>
-                        策略 Strategy
-                      </span>
+                  <div className="mt-3 text-sm text-gray-600 flex items-center justify-center gap-4 flex-wrap">
+                    <span className="flex items-center gap-2">
+                      <span className="w-4 h-0.5 bg-blue-600"></span>
+                      策略 Strategy
+                    </span>
+                    {benchmarkData && (
                       <span className="flex items-center gap-2">
                         <span className="w-4 h-0.5 bg-red-500" style={{backgroundImage: 'repeating-linear-gradient(to right, #ef4444 0, #ef4444 3px, transparent 3px, transparent 8px)'}}></span>
                         基准 Benchmark: {benchmarks.find(b => b.code === selectedBenchmark)?.name}
                       </span>
-                    </div>
-                  )}
+                    )}
+                    {maxDDPeakDate && maxDDTroughDate && (
+                      <>
+                        <span className="flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full bg-red-500 border-2 border-red-600"></span>
+                          回撤起点 Peak ({maxDDPeakDate})
+                        </span>
+                        <span className="flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full bg-amber-500 border-2 border-amber-600"></span>
+                          回撤终点 Trough ({maxDDTroughDate})
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
-              )}
+                );
+              })()}
 
               {/* Daily Returns Chart */}
               {performance?.daily_performances && performance.daily_performances.length > 0 && (

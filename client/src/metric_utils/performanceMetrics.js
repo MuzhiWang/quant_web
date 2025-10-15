@@ -161,3 +161,54 @@ export const calculateDailyTradeRate = (totalTrades, tradingDays) => {
   return totalTrades / tradingDays;
 };
 
+/**
+ * Calculate daily win rate (JoinQuant standard)
+ * Percentage of trading days with positive returns
+ * @param {Array} dailyReturns - Array of daily returns
+ * @returns {number} Win rate as decimal (0-1)
+ */
+export const calculateDailyWinRate = (dailyReturns) => {
+  if (!dailyReturns || dailyReturns.length === 0) {
+    return 0;
+  }
+
+  const profitableDays = dailyReturns.filter(r => r > 0).length;
+  return profitableDays / dailyReturns.length;
+};
+
+/**
+ * Calculate profit/loss ratio (JoinQuant standard)
+ * Average profit on winning days / Average loss on losing days
+ * @param {Array} dailyReturns - Array of daily returns
+ * @returns {Object} Contains profitLossRatio, winningDaysCount, losingDaysCount
+ */
+export const calculateProfitLossRatio = (dailyReturns) => {
+  if (!dailyReturns || dailyReturns.length === 0) {
+    return {
+      profitLossRatio: 0,
+      winningDaysCount: 0,
+      losingDaysCount: 0
+    };
+  }
+
+  const winningDays = dailyReturns.filter(r => r > 0);
+  const losingDays = dailyReturns.filter(r => r < 0);
+
+  if (winningDays.length === 0 || losingDays.length === 0) {
+    return {
+      profitLossRatio: winningDays.length > 0 ? Infinity : 0,
+      winningDaysCount: winningDays.length,
+      losingDaysCount: losingDays.length
+    };
+  }
+
+  const avgProfit = winningDays.reduce((sum, r) => sum + r, 0) / winningDays.length;
+  const avgLoss = Math.abs(losingDays.reduce((sum, r) => sum + r, 0) / losingDays.length);
+
+  return {
+    profitLossRatio: avgLoss > 0 ? avgProfit / avgLoss : 0,
+    winningDaysCount: winningDays.length,
+    losingDaysCount: losingDays.length
+  };
+};
+
