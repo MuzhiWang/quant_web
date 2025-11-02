@@ -28,6 +28,9 @@ const QMTTradingDashboard = () => {
   const [selectedBenchmark, setSelectedBenchmark] = useState('');
   const [benchmarkData, setBenchmarkData] = useState(null);
   
+  // Dry run state
+  const [dryRun, setDryRun] = useState(true); // Default to dry run mode
+  
   // Date range state
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -45,7 +48,7 @@ const QMTTradingDashboard = () => {
   const fetchStrategies = async () => {
     try {
       setCriticalError(null);
-      const response = await fetch(`${API_BASE_URL}/strategies?dry_run=true`);
+      const response = await fetch(`${API_BASE_URL}/strategies?dry_run=${dryRun}`);
       if (!response.ok) throw new Error('Failed to fetch strategies');
       const data = await response.json();
       if (data.strategies && data.strategies.length > 0) {
@@ -106,17 +109,17 @@ const QMTTradingDashboard = () => {
       
       // Build query parameters with date range
       const dateParams = new URLSearchParams();
-      dateParams.append('dry_run', 'true');
+      dateParams.append('dry_run', dryRun);
       dateParams.append('start_date', effectiveStartDate);
       dateParams.append('end_date', effectiveEndDate);
       
       const dateParamsStr = dateParams.toString();
-      const summaryParams = new URLSearchParams({ dry_run: 'true' });
+      const summaryParams = new URLSearchParams({ dry_run: dryRun });
       // Don't pass trade_date - let API use latest available
       // if (effectiveEndDate) summaryParams.append('trade_date', effectiveEndDate);
       
       // Build transactions query parameters with date range
-      const transactionsParams = new URLSearchParams({ limit: '1000', dry_run: 'true' });
+      const transactionsParams = new URLSearchParams({ limit: '1000', dry_run: dryRun });
       transactionsParams.append('start_date', effectiveStartDate);
       transactionsParams.append('end_date', effectiveEndDate);
       
@@ -266,13 +269,21 @@ const QMTTradingDashboard = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedStrategy, selectedBenchmark, startDate, endDate, addToast, performance]);
+  }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast, performance]);
 
   useEffect(() => {
     fetchStrategies();
     fetchBenchmarks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  
+  // Refetch strategies when dry run mode changes
+  useEffect(() => {
+    if (strategies.length > 0) {  // Only refetch if we've already loaded strategies once
+      fetchStrategies();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dryRun]);
 
   // Remove auto-fetch - user must click Refresh button
   // useEffect(() => {
@@ -344,6 +355,19 @@ const QMTTradingDashboard = () => {
               </div>
               
               <div className="flex items-center gap-3">
+                {/* Dry Run Mode Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">模式:</span>
+                  <select
+                    value={dryRun ? 'true' : 'false'}
+                    onChange={(e) => setDryRun(e.target.value === 'true')}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="true">Dry Run (模拟)</option>
+                    <option value="false">Live Trading (实盘)</option>
+                  </select>
+                </div>
+                
                 {/* Benchmark Selector */}
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-600">基准:</span>
@@ -389,7 +413,9 @@ const QMTTradingDashboard = () => {
                   <span>Load Data</span>
                 </button>
                 
-                <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-sm">Dry Run</span>
+                <span className={`px-2 py-1 rounded text-sm ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                  {dryRun ? 'Dry Run' : 'Live Trading'}
+                </span>
               </div>
             </div>
           </div>
@@ -441,6 +467,19 @@ const QMTTradingDashboard = () => {
             
             {/* Date Range Picker & Controls */}
             <div className="flex items-center gap-3">
+              {/* Dry Run Mode Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">模式:</span>
+                <select
+                  value={dryRun ? 'true' : 'false'}
+                  onChange={(e) => setDryRun(e.target.value === 'true')}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="true">Dry Run (模拟)</option>
+                  <option value="false">Live Trading (实盘)</option>
+                </select>
+              </div>
+              
               {/* Benchmark Selector */}
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">基准:</span>
@@ -489,7 +528,9 @@ const QMTTradingDashboard = () => {
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Clock className="w-4 h-4" />
                 <span>{summary?.date}</span>
-                <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">Dry Run</span>
+                <span className={`px-2 py-1 rounded ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                  {dryRun ? 'Dry Run' : 'Live Trading'}
+                </span>
               </div>
             </div>
           </div>
@@ -890,7 +931,7 @@ const QMTTradingDashboard = () => {
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
                   <h3 className="text-lg font-semibold mb-4">Daily Returns</h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={performance.daily_performances.slice(-30).map(d => ({
+                    <BarChart data={performance.daily_performances.map(d => ({
                       ...d,
                       daily_return_pct: d.daily_return ? d.daily_return * 100 : null
                     }))}>
@@ -914,7 +955,6 @@ const QMTTradingDashboard = () => {
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart 
                       data={performance.daily_performances
-                        .slice(-30)
                         .map((day, index, array) => {
                           // Use the daily_cash_change if available
                           if (day.daily_cash_change !== undefined && day.daily_cash_change !== null) {
