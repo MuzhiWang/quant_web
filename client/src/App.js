@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
+import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw, BarChart3, Wallet, List } from 'lucide-react';
 import { ToastContainer } from './components/Toast';
 import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
@@ -8,9 +8,48 @@ import { calculateAllMetrics } from './metric_utils';
 
 const API_BASE_URL = '/api';
 
+// LocalStorage keys
+const STORAGE_KEYS = {
+  SELECTED_STRATEGY: 'qmt_selected_strategy',
+  START_DATE: 'qmt_start_date',
+  END_DATE: 'qmt_end_date',
+  DRY_RUN: 'qmt_dry_run',
+  SELECTED_BENCHMARK: 'qmt_selected_benchmark',
+  VALUE_DISPLAY_MODE: 'qmt_value_display_mode',
+  ACTIVE_TAB: 'qmt_active_tab'
+};
+
+// Helper functions for localStorage
+const loadFromStorage = (key, defaultValue) => {
+  try {
+    const item = localStorage.getItem(key);
+    if (item === null) return defaultValue;
+    
+    // Handle boolean values
+    if (typeof defaultValue === 'boolean') {
+      return item === 'true';
+    }
+    
+    return item;
+  } catch (error) {
+    console.error(`Error loading ${key} from localStorage:`, error);
+    return defaultValue;
+  }
+};
+
+const saveToStorage = (key, value) => {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch (error) {
+    console.error(`Error saving ${key} to localStorage:`, error);
+  }
+};
+
 const QMTTradingDashboard = () => {
   const [strategies, setStrategies] = useState([]);
-  const [selectedStrategy, setSelectedStrategy] = useState('');
+  const [selectedStrategy, setSelectedStrategy] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.SELECTED_STRATEGY, '')
+  );
   const [summary, setSummary] = useState(null);
   const [performance, setPerformance] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -18,22 +57,34 @@ const QMTTradingDashboard = () => {
   const [holdingsHistory, setHoldingsHistory] = useState({});
   const [loading, setLoading] = useState(false); // Changed from true to false
   const [criticalError, setCriticalError] = useState(null); // Only for critical failures
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.ACTIVE_TAB, 'overview')
+  );
   const [toasts, setToasts] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
-  const [valueDisplayMode, setValueDisplayMode] = useState('percentage'); // 'absolute' or 'percentage'
+  const [valueDisplayMode, setValueDisplayMode] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.VALUE_DISPLAY_MODE, 'percentage')
+  );
   
   // Benchmark state
   const [benchmarks, setBenchmarks] = useState([]);
-  const [selectedBenchmark, setSelectedBenchmark] = useState('');
+  const [selectedBenchmark, setSelectedBenchmark] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.SELECTED_BENCHMARK, '')
+  );
   const [benchmarkData, setBenchmarkData] = useState(null);
   
   // Dry run state
-  const [dryRun, setDryRun] = useState(true); // Default to dry run mode
+  const [dryRun, setDryRun] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.DRY_RUN, true)
+  );
   
   // Date range state
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [startDate, setStartDate] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.START_DATE, '')
+  );
+  const [endDate, setEndDate] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.END_DATE, '')
+  );
   
   // Toast management functions
   const addToast = useCallback((message, type = 'error') => {
@@ -53,7 +104,18 @@ const QMTTradingDashboard = () => {
       const data = await response.json();
       if (data.strategies && data.strategies.length > 0) {
         setStrategies(data.strategies);
-        setSelectedStrategy(data.strategies[1]);
+        
+        // Restore saved strategy if it exists in the list, otherwise use second strategy or first
+        const savedStrategy = loadFromStorage(STORAGE_KEYS.SELECTED_STRATEGY, '');
+        if (savedStrategy && data.strategies.includes(savedStrategy)) {
+          setSelectedStrategy(savedStrategy);
+        } else if (!selectedStrategy) {
+          // Only set default if no strategy is currently selected
+          setSelectedStrategy(data.strategies.length > 1 ? data.strategies[1] : data.strategies[0]);
+        } else if (!data.strategies.includes(selectedStrategy)) {
+          // Current selection is not in the list, fallback to default
+          setSelectedStrategy(data.strategies.length > 1 ? data.strategies[1] : data.strategies[0]);
+        }
       } else {
         setCriticalError('No strategies found. Please ensure your Python backend is running and has data.');
       }
@@ -71,8 +133,16 @@ const QMTTradingDashboard = () => {
       const data = await response.json();
       if (data.benchmarks && data.benchmarks.length > 0) {
         setBenchmarks(data.benchmarks);
-        // Set default to first benchmark (沪深300)
-        setSelectedBenchmark(data.benchmarks[0].code);
+        
+        // Restore saved benchmark if it exists in the list, otherwise use first benchmark
+        const savedBenchmark = loadFromStorage(STORAGE_KEYS.SELECTED_BENCHMARK, '');
+        const benchmarkCodes = data.benchmarks.map(b => b.code);
+        if (savedBenchmark && benchmarkCodes.includes(savedBenchmark)) {
+          setSelectedBenchmark(savedBenchmark);
+        } else if (!selectedBenchmark) {
+          // Set default to first benchmark (沪深300)
+          setSelectedBenchmark(data.benchmarks[0].code);
+        }
       }
     } catch (error) {
       console.error('Error fetching benchmarks:', error);
@@ -284,6 +354,39 @@ const QMTTradingDashboard = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dryRun]);
+
+  // Save preferences to localStorage when they change
+  useEffect(() => {
+    if (selectedStrategy) {
+      saveToStorage(STORAGE_KEYS.SELECTED_STRATEGY, selectedStrategy);
+    }
+  }, [selectedStrategy]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.START_DATE, startDate);
+  }, [startDate]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.END_DATE, endDate);
+  }, [endDate]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.DRY_RUN, dryRun);
+  }, [dryRun]);
+
+  useEffect(() => {
+    if (selectedBenchmark) {
+      saveToStorage(STORAGE_KEYS.SELECTED_BENCHMARK, selectedBenchmark);
+    }
+  }, [selectedBenchmark]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.VALUE_DISPLAY_MODE, valueDisplayMode);
+  }, [valueDisplayMode]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.ACTIVE_TAB, activeTab);
+  }, [activeTab]);
 
   // Remove auto-fetch - user must click Refresh button
   // useEffect(() => {
@@ -537,8 +640,8 @@ const QMTTradingDashboard = () => {
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <div className="bg-white border-b border-gray-200">
+      {/* Navigation Tabs - Mobile (Top Row) */}
+      <div className="bg-white border-b border-gray-200 md:hidden">
         <div className="max-w-7xl mx-auto px-6">
           <nav className="flex gap-8">
             {['overview', 'holdings', 'transactions'].map(tab => (
@@ -558,7 +661,34 @@ const QMTTradingDashboard = () => {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      {/* Main Content Container with Sidebar Layout - Fixed Height with Independent Scrolling */}
+      <div className="flex max-w-7xl mx-auto h-[calc(100vh-140px)] md:h-[calc(100vh-88px)]">
+        {/* Left Sidebar Navigation - Desktop Only */}
+        <aside className="hidden md:flex w-56 flex-shrink-0 flex-col bg-white border-r border-gray-200 overflow-y-auto">
+          <nav className="p-4">
+            {[
+              { id: 'overview', label: 'Overview', icon: BarChart3 },
+              { id: 'holdings', label: 'Holdings', icon: Wallet },
+              { id: 'transactions', label: 'Transactions', icon: List }
+            ].map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`w-full text-left px-4 py-3 rounded-lg font-medium text-sm transition-colors mb-2 flex items-center gap-3 ${
+                  activeTab === id
+                    ? 'bg-blue-50 text-blue-600 border-l-4 border-blue-600'
+                    : 'text-gray-700 hover:bg-gray-50 border-l-4 border-transparent'
+                }`}
+              >
+                <Icon className="w-5 h-5" />
+                {label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        {/* Main Content Area with Independent Scrolling */}
+        <div className="flex-1 overflow-y-auto px-6 py-8">
         {/* Overview Tab */}
         {activeTab === 'overview' && summary && (
           <>
@@ -1186,6 +1316,7 @@ const QMTTradingDashboard = () => {
           )
         )}
 
+        </div>
       </div>
     </div>
   );
