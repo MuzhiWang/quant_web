@@ -7,11 +7,22 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000/api';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: CORS_ORIGIN,
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
 
 // API Proxy endpoints - Forward requests to Python FastAPI backend
 app.get('/api/*', async (req, res) => {
@@ -33,6 +44,30 @@ app.get('/api/*', async (req, res) => {
   }
 });
 
+app.post('/api/*', async (req, res) => {
+  try {
+    const apiPath = req.path.replace('/api', '');
+    const queryString = new URLSearchParams(req.query).toString();
+    const url = `${API_BASE_URL}${apiPath}${queryString ? '?' + queryString : ''}`;
+    
+    console.log(`[Proxy POST] ${url}`);
+    console.log(`[Proxy POST Body]`, req.body);
+    
+    const response = await axios.post(url, req.body, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    res.json(response.data);
+  } catch (error) {
+    console.error('[Proxy POST Error]', error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.message,
+      details: error.response?.data || 'Failed to connect to backend API'
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -44,10 +79,18 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Serve React app for all other routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// // Serve static files AFTER API proxy
+// app.use(express.static(path.join(__dirname, 'public')));
+
+// // Serve React app for all other routes - MUST BE LAST!
+// // This catch-all should only handle non-API routes
+// app.get('*', (req, res, next) => {
+//   // Don't intercept API routes
+//   if (req.path.startsWith('/api')) {
+//     return next();
+//   }
+//   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -55,6 +98,17 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     error: 'Internal Server Error',
     message: err.message
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  console.log(`404 - Route not found: ${req.method} ${req.url}`);
+  res.status(404).json({ 
+    error: 'Not found', 
+    path: req.url,
+    method: req.method,
+    message: 'This route does not exist. API requests should go to /api/*'
   });
 });
 

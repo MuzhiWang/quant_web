@@ -6,7 +6,7 @@ import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
 import { calculateAllMetrics } from './metric_utils';
 
-const API_BASE_URL = '/api';
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000/api';
 
 // LocalStorage keys
 const STORAGE_KEYS = {
@@ -16,7 +16,18 @@ const STORAGE_KEYS = {
   DRY_RUN: 'qmt_dry_run',
   SELECTED_BENCHMARK: 'qmt_selected_benchmark',
   VALUE_DISPLAY_MODE: 'qmt_value_display_mode',
-  ACTIVE_TAB: 'qmt_active_tab'
+  ACTIVE_TAB: 'qmt_active_tab',
+  REALTIME_UPDATE: 'qmt_realtime_update',
+  UPDATE_INTERVAL: 'qmt_update_interval'
+};
+
+// Realtime update intervals (in milliseconds)
+const UPDATE_INTERVALS = {
+  '1m': { label: '1 min', value: 60000 },
+  '5m': { label: '5 min', value: 300000 },
+  '15m': { label: '15 min', value: 900000 },
+  '30m': { label: '30 min', value: 1800000 },
+  '1h': { label: '1 hour', value: 3600000 }
 };
 
 // Helper functions for localStorage
@@ -86,6 +97,17 @@ const QMTTradingDashboard = () => {
     loadFromStorage(STORAGE_KEYS.END_DATE, '')
   );
   
+  // Realtime update state
+  const [realtimeUpdate, setRealtimeUpdate] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.REALTIME_UPDATE, false)
+  );
+  const [updateInterval, setUpdateInterval] = useState(() => 
+    loadFromStorage(STORAGE_KEYS.UPDATE_INTERVAL, '5m')
+  );
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [lastUpdateTime, setLastUpdateTime] = useState(null);
+  
   // Toast management functions
   const addToast = useCallback((message, type = 'error') => {
     const id = Date.now();
@@ -153,7 +175,7 @@ const QMTTradingDashboard = () => {
     }
   };
 
-  const fetchAllData = useCallback(async () => {
+  const fetchAllData = useCallback(async (silent = false) => {
     if (!selectedStrategy) {
       addToast('Please select a strategy first', 'error');
       return;
@@ -164,7 +186,10 @@ const QMTTradingDashboard = () => {
       return;
     }
     
-    setLoading(true);
+    // Only show loading spinner if not in silent mode
+    if (!silent) {
+      setLoading(true);
+    }
     setDataLoaded(true);
     
     try {
@@ -335,9 +360,13 @@ const QMTTradingDashboard = () => {
       
     } catch (error) {
       console.error('Error fetching data:', error);
-      addToast(`Unexpected error: ${error.message}`, 'error');
+      if (!silent) {
+        addToast(`Unexpected error: ${error.message}`, 'error');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast, performance]);
 
@@ -387,6 +416,89 @@ const QMTTradingDashboard = () => {
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.ACTIVE_TAB, activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.REALTIME_UPDATE, realtimeUpdate);
+  }, [realtimeUpdate]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.UPDATE_INTERVAL, updateInterval);
+  }, [updateInterval]);
+
+  // Auto-set end_date to today when realtime update is enabled
+  useEffect(() => {
+    if (realtimeUpdate) {
+      const today = new Date().toISOString().split('T')[0];
+      setEndDate(today);
+    }
+  }, [realtimeUpdate]);
+
+  // Realtime update interval effect
+  useEffect(() => {
+    if (!realtimeUpdate || !selectedStrategy || !dataLoaded) {
+      return;
+    }
+
+    const intervalMs = UPDATE_INTERVALS[updateInterval].value;
+    
+    const performRealtimeUpdate = async () => {
+      try {
+        setIsUpdating(true);
+        setUpdateProgress(10);
+        
+        // Call realtime-update API
+        const updateResponse = await fetch(`${API_BASE_URL}/realtime-update`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            strategy: selectedStrategy,
+            dry_run: dryRun,
+            lookback_days: 7
+          })
+        });
+        
+        setUpdateProgress(50);
+        
+        if (!updateResponse.ok) {
+          throw new Error('Realtime update failed');
+        }
+        
+        const updateResult = await updateResponse.json();
+        console.log('Realtime update result:', updateResult);
+        
+        setUpdateProgress(70);
+        
+        if (updateResult.status === 'success' || updateResult.status === 'partial_success') {
+          // Silently refresh all data
+          await fetchAllData(true); // true = silent mode
+          setLastUpdateTime(new Date());
+          addToast('Data refreshed successfully', 'success');
+        } else {
+          addToast(`Update warning: ${updateResult.message}`, 'warning');
+        }
+        
+        setUpdateProgress(100);
+      } catch (error) {
+        console.error('Realtime update error:', error);
+        addToast(`Realtime update failed: ${error.message}`, 'error');
+      } finally {
+        setTimeout(() => {
+          setIsUpdating(false);
+          setUpdateProgress(0);
+        }, 500);
+      }
+    };
+
+    // Perform initial update
+    performRealtimeUpdate();
+    
+    // Set up interval
+    const intervalId = setInterval(performRealtimeUpdate, intervalMs);
+    
+    return () => clearInterval(intervalId);
+  }, [realtimeUpdate, updateInterval, selectedStrategy, dryRun, dataLoaded, addToast, fetchAllData]);
 
   // Remove auto-fetch - user must click Refresh button
   // useEffect(() => {
@@ -457,7 +569,7 @@ const QMTTradingDashboard = () => {
                 </select>
               </div>
               
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 {/* Dry Run Mode Selector */}
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-600">模式:</span>
@@ -488,6 +600,34 @@ const QMTTradingDashboard = () => {
                   </select>
                 </div>
                 
+                {/* Realtime Update Toggle */}
+                <div className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg bg-white">
+                  <span className="text-sm text-gray-600">Realtime:</span>
+                  <button
+                    onClick={() => setRealtimeUpdate(!realtimeUpdate)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      realtimeUpdate ? 'bg-green-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        realtimeUpdate ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  {realtimeUpdate && (
+                    <select
+                      value={updateInterval}
+                      onChange={(e) => setUpdateInterval(e.target.value)}
+                      className="px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                    >
+                      {Object.entries(UPDATE_INTERVALS).map(([key, { label }]) => (
+                        <option key={key} value={key}>{label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-gray-500" />
                   <input
@@ -501,14 +641,18 @@ const QMTTradingDashboard = () => {
                   <input
                     type="date"
                     value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => !realtimeUpdate && setEndDate(e.target.value)}
+                    disabled={realtimeUpdate}
+                    className={`px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                      realtimeUpdate ? 'bg-gray-100 cursor-not-allowed' : ''
+                    }`}
                     placeholder="End Date"
+                    title={realtimeUpdate ? 'End date is auto-set to today in realtime mode' : ''}
                   />
                 </div>
                 
                 <button
-                  onClick={fetchAllData}
+                  onClick={() => fetchAllData(false)}
                   disabled={!selectedStrategy}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
@@ -548,6 +692,18 @@ const QMTTradingDashboard = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Loading Progress Bar */}
+      {isUpdating && (
+        <div className="fixed top-0 left-0 right-0 z-50">
+          <div className="h-1 bg-blue-200">
+            <div 
+              className="h-full bg-blue-600 transition-all duration-300 ease-out"
+              style={{ width: `${updateProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+      
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} removeToast={removeToast} />
       
@@ -569,73 +725,118 @@ const QMTTradingDashboard = () => {
             </div>
             
             {/* Date Range Picker & Controls */}
-            <div className="flex items-center gap-3">
-              {/* Dry Run Mode Selector */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">模式:</span>
-                <select
-                  value={dryRun ? 'true' : 'false'}
-                  onChange={(e) => setDryRun(e.target.value === 'true')}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Dry Run Mode Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">模式:</span>
+                  <select
+                    value={dryRun ? 'true' : 'false'}
+                    onChange={(e) => setDryRun(e.target.value === 'true')}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="true">Dry Run (模拟)</option>
+                    <option value="false">Live Trading (实盘)</option>
+                  </select>
+                </div>
+                
+                {/* Benchmark Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">基准:</span>
+                  <select
+                    value={selectedBenchmark}
+                    onChange={(e) => setSelectedBenchmark(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!benchmarks.length}
+                  >
+                    {benchmarks.map(benchmark => (
+                      <option key={benchmark.code} value={benchmark.code}>
+                        {benchmark.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Realtime Update Toggle */}
+                <div className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg bg-white">
+                  <span className="text-sm text-gray-600">Realtime:</span>
+                  <button
+                    onClick={() => setRealtimeUpdate(!realtimeUpdate)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      realtimeUpdate ? 'bg-green-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        realtimeUpdate ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  {realtimeUpdate && (
+                    <>
+                      <select
+                        value={updateInterval}
+                        onChange={(e) => setUpdateInterval(e.target.value)}
+                        className="px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                      >
+                        {Object.entries(UPDATE_INTERVALS).map(([key, { label }]) => (
+                          <option key={key} value={key}>{label}</option>
+                        ))}
+                      </select>
+                      {lastUpdateTime && (
+                        <span className="text-xs text-gray-500">
+                          {lastUpdateTime.toLocaleTimeString()}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-gray-500" />
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Start Date"
+                  />
+                  <span className="text-gray-500">to</span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => !realtimeUpdate && setEndDate(e.target.value)}
+                    disabled={realtimeUpdate}
+                    className={`px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                      realtimeUpdate ? 'bg-gray-100 cursor-not-allowed' : ''
+                    }`}
+                    placeholder="End Date"
+                    title={realtimeUpdate ? 'End date is auto-set to today in realtime mode' : ''}
+                  />
+                </div>
+                
+                <button
+                  onClick={() => fetchAllData(false)}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  <option value="true">Dry Run (模拟)</option>
-                  <option value="false">Live Trading (实盘)</option>
-                </select>
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+                
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <Clock className="w-4 h-4" />
+                  <span>{summary?.date}</span>
+                  <span className={`px-2 py-1 rounded ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                    {dryRun ? 'Dry Run' : 'Live Trading'}
+                  </span>
+                  {realtimeUpdate && (
+                    <span className="px-2 py-1 rounded bg-green-100 text-green-700 flex items-center gap-1">
+                      <span className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></span>
+                      Live
+                    </span>
+                  )}
+                </div>
               </div>
-              
-              {/* Benchmark Selector */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">基准:</span>
-                <select
-                  value={selectedBenchmark}
-                  onChange={(e) => setSelectedBenchmark(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled={!benchmarks.length}
-                >
-                  {benchmarks.map(benchmark => (
-                    <option key={benchmark.code} value={benchmark.code}>
-                      {benchmark.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-gray-500" />
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Start Date"
-                />
-                <span className="text-gray-500">to</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="End Date"
-                />
-              </div>
-              
-              <button
-                onClick={fetchAllData}
-                disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                <span>Refresh</span>
-              </button>
-              
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <Clock className="w-4 h-4" />
-                <span>{summary?.date}</span>
-                <span className={`px-2 py-1 rounded ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
-                  {dryRun ? 'Dry Run' : 'Live Trading'}
-                </span>
-              </div>
-            </div>
           </div>
         </div>
       </header>
