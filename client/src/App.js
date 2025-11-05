@@ -4,6 +4,7 @@ import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calenda
 import { ToastContainer } from './components/Toast';
 import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
+import { LoadingSection } from './components/LoadingOverlay';
 import { calculateAllMetrics } from './metric_utils';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000/api';
@@ -108,6 +109,17 @@ const QMTTradingDashboard = () => {
   const [updateProgress, setUpdateProgress] = useState(0);
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
   
+  // Section-specific loading states
+  const [loadingSections, setLoadingSections] = useState({
+    metricsGrid: false,
+    metricCards: false,
+    portfolioChart: false,
+    dailyReturns: false,
+    dailyCashFlow: false,
+    holdings: false,
+    transactions: false
+  });
+  
   // Toast management functions
   const addToast = useCallback((message, type = 'error') => {
     const id = Date.now();
@@ -189,6 +201,17 @@ const QMTTradingDashboard = () => {
     // Only show loading spinner if not in silent mode
     if (!silent) {
       setLoading(true);
+    } else {
+      // In silent mode (auto-update), show section loading states
+      setLoadingSections({
+        metricsGrid: true,
+        metricCards: true,
+        portfolioChart: true,
+        dailyReturns: true,
+        dailyCashFlow: true,
+        holdings: true,
+        transactions: true
+      });
     }
     setDataLoaded(true);
     
@@ -242,9 +265,12 @@ const QMTTradingDashboard = () => {
         addToast('Failed to load portfolio summary. Please try again.', 'error');
       }
 
-      // Process performance
+      // Process performance and transactions together to avoid state update issues
+      let performanceData = null;
+      let transactionsData = null;
+      
       if (results[1].status === 'fulfilled' && results[1].value.ok) {
-        const performanceData = await results[1].value.json();
+        performanceData = await results[1].value.json();
         console.log('Performance data:', performanceData);
         
         // Debug total_trades issue
@@ -266,51 +292,51 @@ const QMTTradingDashboard = () => {
           }
           console.log('Sample day data:', performanceData.daily_performances[0]);
         }
-        setPerformance(performanceData);
       } else {
         console.error('Failed to fetch performance:', results[1]);
         addToast('Failed to load performance metrics. Please try again.', 'error');
       }
 
-      // Process transactions and update trade counts if needed
+      // Process transactions
       if (results[2].status === 'fulfilled' && results[2].value.ok) {
-        const transactionsData = await results[2].value.json();
+        transactionsData = await results[2].value.json();
         setTransactions(transactionsData);
-        
-        // Fix for total_trades showing as 0
-        // Check if we have transactions but performance data shows 0 trades
-        const performanceState = performance; // Get current performance state
-        if (performanceState && 
-            (!performanceState.total_trades || performanceState.total_trades === 0) && 
-            transactionsData && transactionsData.length > 0) {
-          
-          console.log('Calculating trade counts from transactions data');
-          
-          // Count the transactions
-          const totalTrades = transactionsData.length;
-          const buyTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'buy').length;
-          const sellTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'sell').length;
-          
-          // Create a new performance object with the trade counts
-          const updatedPerformanceData = {
-            ...performanceState,
-            total_trades: totalTrades,
-            buy_trades: buyTrades,
-            sell_trades: sellTrades
-          };
-          
-          console.log('Updated trade counts:', { 
-            total: totalTrades, 
-            buy: buyTrades, 
-            sell: sellTrades 
-          });
-          
-          // Update the state with corrected data
-          setPerformance(updatedPerformanceData);
-        }
       } else {
         console.error('Failed to fetch transactions:', results[2]);
         addToast('Failed to load transactions. Please try again.', 'error');
+      }
+      
+      // Fix for total_trades showing as 0
+      // Update performance data with transaction counts if needed
+      if (performanceData && 
+          (!performanceData.total_trades || performanceData.total_trades === 0) && 
+          transactionsData && transactionsData.length > 0) {
+        
+        console.log('Calculating trade counts from transactions data');
+        
+        // Count the transactions
+        const totalTrades = transactionsData.length;
+        const buyTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'buy').length;
+        const sellTrades = transactionsData.filter(tx => tx.action.toLowerCase() === 'sell').length;
+        
+        // Update performance data with the trade counts
+        performanceData = {
+          ...performanceData,
+          total_trades: totalTrades,
+          buy_trades: buyTrades,
+          sell_trades: sellTrades
+        };
+        
+        console.log('Updated trade counts:', { 
+          total: totalTrades, 
+          buy: buyTrades, 
+          sell: sellTrades 
+        });
+      }
+      
+      // Set performance state once with all updates applied
+      if (performanceData) {
+        setPerformance(performanceData);
       }
 
       // Process daily PnL
@@ -366,9 +392,20 @@ const QMTTradingDashboard = () => {
     } finally {
       if (!silent) {
         setLoading(false);
+      } else {
+        // Clear section loading states after data is loaded
+        setLoadingSections({
+          metricsGrid: false,
+          metricCards: false,
+          portfolioChart: false,
+          dailyReturns: false,
+          dailyCashFlow: false,
+          holdings: false,
+          transactions: false
+        });
       }
     }
-  }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast, performance]);
+  }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast]);
 
   useEffect(() => {
     fetchStrategies();
@@ -894,9 +931,14 @@ const QMTTradingDashboard = () => {
         {activeTab === 'overview' && summary && (
           <>
             {/* Compact Metrics Grid (Like JoinQuant) */}
-            {performance && <MetricsGrid performance={performance} benchmarkData={benchmarkData} transactions={transactions} />}
+            {performance && (
+              <LoadingSection isLoading={loadingSections.metricsGrid}>
+                <MetricsGrid performance={performance} benchmarkData={benchmarkData} transactions={transactions} />
+              </LoadingSection>
+            )}
             
             {/* Key Metrics Cards */}
+            <LoadingSection isLoading={loadingSections.metricCards}>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
               <MetricCard
                 title="Total Value"
@@ -923,6 +965,7 @@ const QMTTradingDashboard = () => {
                 color="orange"
               />
             </div>
+            </LoadingSection>
 
             {/* Performance Metrics */}
             {performance && (
@@ -987,11 +1030,53 @@ const QMTTradingDashboard = () => {
             {/* Performance Charts Section */}
             <div className="space-y-8">
               {/* Portfolio Value Chart with Benchmark */}
-              {dailyPnl.length > 0 && (() => {
+              {dailyPnl.length > 0 && (
+              <LoadingSection isLoading={loadingSections.portfolioChart}>
+              {(() => {
                 // Calculate max drawdown dates
                 const metrics = calculateAllMetrics(performance, benchmarkData, transactions);
                 const maxDDPeakDate = metrics.maxDrawdownPeakDate;
                 const maxDDTroughDate = metrics.maxDrawdownTroughDate;
+                
+                // Create benchmark map ONCE outside the map function
+                const benchmarkMap = {};
+                let firstBenchmarkData = null;
+                
+                if (benchmarkData && benchmarkData.data && benchmarkData.data.length > 0) {
+                  // Build the benchmark map
+                  benchmarkData.data.forEach(b => {
+                    benchmarkMap[b.date] = {
+                      close: parseFloat(b.close || 0),
+                      daily_return: parseFloat(b.daily_return || 0)
+                    };
+                  });
+                  
+                  // Find the first matching benchmark data point
+                  // Try to find benchmark data for the first portfolio date
+                  for (let i = 0; i < dailyPnl.length; i++) {
+                    const portfolioDate = dailyPnl[i].date;
+                    if (benchmarkMap[portfolioDate] && benchmarkMap[portfolioDate].close > 0) {
+                      firstBenchmarkData = benchmarkMap[portfolioDate];
+                      console.log('Found first matching benchmark data:', {
+                        date: portfolioDate,
+                        close: firstBenchmarkData.close
+                      });
+                      break;
+                    }
+                  }
+                  
+                  // Debug logging
+                  console.log('Benchmark map created with', Object.keys(benchmarkMap).length, 'dates');
+                  console.log('Benchmark dates:', Object.keys(benchmarkMap).slice(0, 5));
+                  console.log('Daily PnL dates:', dailyPnl.slice(0, 5).map(d => d.date));
+                  console.log('First benchmark data:', firstBenchmarkData);
+                  
+                  if (!firstBenchmarkData) {
+                    console.warn('No matching benchmark data found for any portfolio dates!');
+                    console.warn('Portfolio date range:', dailyPnl[0]?.date, 'to', dailyPnl[dailyPnl.length - 1]?.date);
+                    console.warn('Benchmark date range:', Object.keys(benchmarkMap)[0], 'to', Object.keys(benchmarkMap)[Object.keys(benchmarkMap).length - 1]);
+                  }
+                }
                 
                 return (
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
@@ -1023,34 +1108,7 @@ const QMTTradingDashboard = () => {
                   <ResponsiveContainer width="100%" height={350}>
                     <LineChart data={dailyPnl.map((d, idx) => {
                       let strategyValue = d.value;
-                      let benchmarkValue = 0;
-                      
-                      // Create a date-aligned benchmark data map with close prices
-                      const benchmarkMap = {};
-                      if (benchmarkData && benchmarkData.data) {
-                        benchmarkData.data.forEach(b => {
-                          benchmarkMap[b.date] = {
-                            close: parseFloat(b.close || 0),
-                            daily_return: parseFloat(b.daily_return || 0)
-                          };
-                        });
-                        // Debug: log benchmark map for first few dates
-                        if (idx === 0) {
-                          console.log('Benchmark map created:', Object.keys(benchmarkMap).slice(0, 5));
-                          console.log('Daily PnL dates:', dailyPnl.slice(0, 5).map(d => d.date));
-                          console.log('Sample benchmark data:', benchmarkData.data.slice(0, 3));
-                          
-                          // Debug first benchmark calculation
-                          const firstDate = dailyPnl[0].date;
-                          const firstBenchmark = benchmarkMap[firstDate];
-                          console.log('First benchmark calculation:', {
-                            date: firstDate,
-                            firstBenchmark,
-                            firstClose: firstBenchmark?.close,
-                            calculation: firstBenchmark ? '((current_close - first_close) / first_close) * 100' : 'No benchmark data'
-                          });
-                        }
-                      }
+                      let benchmarkValue = null;
                       
                       if (valueDisplayMode === 'percentage') {
                         if (idx === 0) {
@@ -1060,74 +1118,50 @@ const QMTTradingDashboard = () => {
                           const initialValue = dailyPnl[0].value;
                           strategyValue = ((d.value - initialValue) / initialValue) * 100;
                           
-                          // Calculate benchmark percentage change from day 1 using absolute close prices
-                          if (benchmarkData && benchmarkData.data) {
-                            // Find the first benchmark close price (day 1 equivalent)
-                            const firstBenchmarkDate = dailyPnl[0].date;
-                            const firstBenchmarkData = benchmarkMap[firstBenchmarkDate];
-                            
-                            if (firstBenchmarkData && firstBenchmarkData.close > 0) {
-                              const currentDate = d.date;
-                              const currentBenchmarkData = benchmarkMap[currentDate];
-                              
-                              if (currentBenchmarkData && currentBenchmarkData.close > 0) {
-                                // Calculate percentage change from day 1: (current_close - day1_close) / day1_close * 100
-                                benchmarkValue = ((currentBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
-                              } else {
-                                // Forward fill: use previous day's benchmark value (not recalculate from day 1)
-                                if (idx > 0) {
-                                  // Find the most recent previous day that has benchmark data
-                                  let prevBenchmarkValue = 0;
-                                  for (let i = idx - 1; i >= 0; i--) {
-                                    const prevDate = dailyPnl[i].date;
-                                    const prevBenchmarkData = benchmarkMap[prevDate];
-                                    if (prevBenchmarkData && prevBenchmarkData.close > 0) {
-                                      // Calculate the previous day's benchmark value from day 1
-                                      prevBenchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
-                                      // Debug: log forward fill
-                                      if (idx <= 3) {
-                                        console.log(`Forward fill for ${currentDate}: using ${prevDate} value ${prevBenchmarkValue.toFixed(2)}%`);
-                                      }
-                                      break;
-                                    }
-                                  }
-                                  benchmarkValue = prevBenchmarkValue;
-                                }
-                              }
-                            }
-                          }
-                        }
-                      } else {
-                        // For absolute value, show benchmark as cumulative return percentage overlay
-                        if (benchmarkData && benchmarkData.data) {
-                          // Find the first benchmark close price (day 1 equivalent)
-                          const firstBenchmarkDate = dailyPnl[0].date;
-                          const firstBenchmarkData = benchmarkMap[firstBenchmarkDate];
-                          
+                          // Calculate benchmark percentage change from first available benchmark date
                           if (firstBenchmarkData && firstBenchmarkData.close > 0) {
                             const currentDate = d.date;
                             const currentBenchmarkData = benchmarkMap[currentDate];
                             
                             if (currentBenchmarkData && currentBenchmarkData.close > 0) {
-                              // Calculate percentage change from day 1: (current_close - day1_close) / day1_close * 100
+                              // Calculate percentage change from first benchmark date
                               benchmarkValue = ((currentBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
                             } else {
-                              // Forward fill: use previous day's benchmark value (not recalculate from day 1)
-                              if (idx > 0) {
-                                // Find the most recent previous day that has benchmark data
-                                let prevBenchmarkValue = 0;
-                                for (let i = idx - 1; i >= 0; i--) {
-                                  const prevDate = dailyPnl[i].date;
-                                  const prevBenchmarkData = benchmarkMap[prevDate];
-                                  if (prevBenchmarkData && prevBenchmarkData.close > 0) {
-                                    // Calculate the previous day's benchmark value from day 1
-                                    prevBenchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
-                                    break;
-                                  }
+                              // Forward fill: use previous day's benchmark value
+                              benchmarkValue = null;
+                              for (let i = idx - 1; i >= 0; i--) {
+                                const prevDate = dailyPnl[i].date;
+                                const prevBenchmarkData = benchmarkMap[prevDate];
+                                if (prevBenchmarkData && prevBenchmarkData.close > 0) {
+                                  benchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
+                                  break;
                                 }
-                                benchmarkValue = prevBenchmarkValue;
+                              }
+                              // If still null, set to 0
+                              if (benchmarkValue === null) benchmarkValue = 0;
+                            }
+                          }
+                        }
+                      } else {
+                        // For absolute value mode, show benchmark as percentage overlay
+                        if (firstBenchmarkData && firstBenchmarkData.close > 0) {
+                          const currentDate = d.date;
+                          const currentBenchmarkData = benchmarkMap[currentDate];
+                          
+                          if (currentBenchmarkData && currentBenchmarkData.close > 0) {
+                            benchmarkValue = ((currentBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
+                          } else {
+                            // Forward fill
+                            benchmarkValue = null;
+                            for (let i = idx - 1; i >= 0; i--) {
+                              const prevDate = dailyPnl[i].date;
+                              const prevBenchmarkData = benchmarkMap[prevDate];
+                              if (prevBenchmarkData && prevBenchmarkData.close > 0) {
+                                benchmarkValue = ((prevBenchmarkData.close - firstBenchmarkData.close) / firstBenchmarkData.close) * 100;
+                                break;
                               }
                             }
+                            if (benchmarkValue === null) benchmarkValue = 0;
                           }
                         }
                       }
@@ -1140,7 +1174,7 @@ const QMTTradingDashboard = () => {
                         ...d, 
                         strategyValue, 
                         benchmarkValue,
-                        hasBenchmark: !!benchmarkData,
+                        hasBenchmark: !!firstBenchmarkData,
                         isMaxDDPeak,
                         isMaxDDTrough
                       };
@@ -1216,7 +1250,7 @@ const QMTTradingDashboard = () => {
                           return null;
                         }}
                       />
-                      {benchmarkData && (
+                      {firstBenchmarkData && (
                         <Line 
                           type="monotone" 
                           dataKey="benchmarkValue" 
@@ -1234,7 +1268,7 @@ const QMTTradingDashboard = () => {
                       <span className="w-4 h-0.5 bg-blue-600"></span>
                       策略 Strategy
                     </span>
-                    {benchmarkData && (
+                    {firstBenchmarkData && (
                       <span className="flex items-center gap-2">
                         <span className="w-4 h-0.5 bg-red-500" style={{backgroundImage: 'repeating-linear-gradient(to right, #ef4444 0, #ef4444 3px, transparent 3px, transparent 8px)'}}></span>
                         基准 Benchmark: {benchmarks.find(b => b.code === selectedBenchmark)?.name}
@@ -1256,9 +1290,12 @@ const QMTTradingDashboard = () => {
                 </div>
                 );
               })()}
+              </LoadingSection>
+              )}
 
               {/* Daily Returns Chart */}
               {performance?.daily_performances && performance.daily_performances.length > 0 && (
+              <LoadingSection isLoading={loadingSections.dailyReturns}>
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
                   <h3 className="text-lg font-semibold mb-4">Daily Returns</h3>
                   <ResponsiveContainer width="100%" height={300}>
@@ -1277,10 +1314,12 @@ const QMTTradingDashboard = () => {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              </LoadingSection>
               )}
               
               {/* Daily Cash Flow Chart */}
               {performance?.daily_performances && performance.daily_performances.length > 0 && (
+              <LoadingSection isLoading={loadingSections.dailyCashFlow}>
                 <div className="bg-white p-6 rounded-lg border border-gray-200">
                   <h3 className="text-lg font-semibold mb-4">Daily Cash Flow</h3>
                   <ResponsiveContainer width="100%" height={300}>
@@ -1327,6 +1366,7 @@ const QMTTradingDashboard = () => {
                     Positive values indicate cash inflows (from selling or deposits), negative values indicate outflows (from buying).
                   </p>
                 </div>
+              </LoadingSection>
               )}
             </div>
           </>
@@ -1334,7 +1374,8 @@ const QMTTradingDashboard = () => {
 
         {/* Holdings Tab */}
         {activeTab === 'holdings' && (
-          Object.keys(holdingsHistory).length > 0 ? (
+          <LoadingSection isLoading={loadingSections.holdings}>
+          {Object.keys(holdingsHistory).length > 0 ? (
             <div className="space-y-6">
               {Object.entries(holdingsHistory)
                 .sort(([dateA], [dateB]) => dateA.localeCompare(dateB)) // Sort by date ascending
@@ -1415,12 +1456,14 @@ const QMTTradingDashboard = () => {
                 }
               </p>
             </div>
-          )
+          )}
+          </LoadingSection>
         )}
 
         {/* Transactions Tab */}
         {activeTab === 'transactions' && (
-          transactions.length > 0 ? (
+          <LoadingSection isLoading={loadingSections.transactions}>
+          {transactions.length > 0 ? (
           <div className="space-y-6">
             {/* Group transactions by date */}
             {Object.entries(
@@ -1514,7 +1557,8 @@ const QMTTradingDashboard = () => {
                 }
               </p>
             </div>
-          )
+          )}
+          </LoadingSection>
         )}
 
         </div>

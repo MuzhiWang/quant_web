@@ -106,7 +106,7 @@ export const calculateSortinoRatio = (dailyReturns, riskFreeRate = 0.03) => {
 
 /**
  * Calculate annualized return
- * @param {number} totalReturn - Total return as decimal (e.g., 0.1187 for 11.87%)
+ * @param {number} totalReturn - Total return in percentage format from API (e.g., 1.92 for 1.92%)
  * @param {number} tradingDays - Number of trading days
  * @returns {number} Annualized return as decimal
  */
@@ -115,21 +115,25 @@ export const calculateAnnualReturn = (totalReturn, tradingDays) => {
     return 0;
   }
 
-  // Convert total return to decimal if it's in percentage format
-  let returnDecimal = totalReturn;
-  if (Math.abs(totalReturn) > 10) {
-    // If the value is > 10, assume it's in percentage format (e.g., 11.87)
-    returnDecimal = totalReturn / 100;
-  }
+  // API returns total_return as percentage (e.g., 1.92 for 1.92%)
+  // Convert to decimal for calculation
+  const returnDecimal = totalReturn / 100;
   
   if (returnDecimal === 0) {
     return 0;
   }
 
   const years = tradingDays / 252; // 252 trading days per year
+  
+  // Handle edge case of very short trading period (< 5 days)
+  if (tradingDays < 5) {
+    console.warn(`Annual Return: Trading period too short (${tradingDays} days), returning 0`);
+    return 0;
+  }
+  
   const annualReturn = Math.pow(1 + returnDecimal, 1 / years) - 1;
   
-  console.log(`Annual Return Calculation: totalReturn=${totalReturn}, tradingDays=${tradingDays}, years=${years.toFixed(2)}, annualReturn=${(annualReturn * 100).toFixed(2)}%`);
+  console.log(`Annual Return Calculation: totalReturn=${totalReturn}%, returnDecimal=${returnDecimal.toFixed(4)}, tradingDays=${tradingDays}, years=${years.toFixed(3)}, annualReturn=${(annualReturn * 100).toFixed(2)}%`);
   
   return annualReturn;
 };
