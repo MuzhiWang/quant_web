@@ -6,7 +6,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8001/api';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 
 // Middleware

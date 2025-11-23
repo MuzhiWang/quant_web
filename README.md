@@ -16,7 +16,8 @@ A React-based web dashboard for visualizing and analyzing QMT quantitative tradi
 
 ## Prerequisites
 
-- Python FastAPI backend server running on `http://localhost:8000` (see `quant/joinquant/strategy/realtime_trading/trading_component/qmt_trading/server/`)
+- Python FastAPI backend server running on `http://localhost:8001` (see `quant/joinquant/strategy/realtime_trading/trading_component/qmt_trading/server/`)
+- Trading system metrics available on `http://localhost:8000/metrics` (when trading system is running)
 - Node.js (v22.20.0 or later recommended)
 
 ## Node Installation
@@ -127,8 +128,8 @@ This approach ensures maximum availability - the UI remains usable even when som
 
 ### Backend Connection Issues
 If you see "Cannot connect to backend API" errors:
-- Ensure the Python FastAPI server is running on port 8000
-- Check that the backend API is accessible at `http://localhost:8000/api/health`
+- Ensure the Python FastAPI server is running on port 8001
+- Check that the backend API is accessible at `http://localhost:8001/api/health`
 - Verify database connectivity in the backend
 
 ### Toast Notification Errors

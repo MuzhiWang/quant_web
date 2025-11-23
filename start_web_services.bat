@@ -16,7 +16,8 @@ echo.
 echo ===============================================
 echo Services Status:
 echo ===============================================
-echo Python Backend:  http://localhost:8000 (external)
+echo Trading Metrics: http://localhost:8000/metrics (external)
+echo Python API:      http://localhost:8001 (external)
 echo Node.js Server:  http://localhost:3000 (starting)
 echo React Client:    http://localhost:3001 (starting)
 echo ===============================================

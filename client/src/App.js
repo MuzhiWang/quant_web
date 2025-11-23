@@ -155,7 +155,7 @@ const QMTTradingDashboard = () => {
       }
     } catch (error) {
       console.error('Error fetching strategies:', error);
-      setCriticalError(`Cannot connect to backend API. Please ensure Python FastAPI server is running on port 8000. Error: ${error.message}`);
+      setCriticalError(`Cannot connect to backend API. Please ensure Python FastAPI server is running on port 8001. Error: ${error.message}`);
       setLoading(false);
     }
   };
@@ -247,9 +247,12 @@ const QMTTradingDashboard = () => {
         end_date: effectiveEndDate
       });
       
+      // Try with use_metrics=true first, fallback to false if it fails
+      let performanceUrl = `${API_BASE_URL}/strategy/${selectedStrategy}/performance?${dateParamsStr}&use_metrics=true`;
+      
       const results = await Promise.allSettled([
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/summary?${summaryParams.toString()}`),
-        fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/performance?${dateParamsStr}&use_metrics=true`),
+        fetch(performanceUrl),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/transactions?${transactionsParams.toString()}`),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/daily-pnl?${dateParamsStr}`),
         fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/holdings?${dateParamsStr}`),
@@ -293,8 +296,22 @@ const QMTTradingDashboard = () => {
           console.log('Sample day data:', performanceData.daily_performances[0]);
         }
       } else {
-        console.error('Failed to fetch performance:', results[1]);
-        addToast('Failed to load performance metrics. Please try again.', 'error');
+        // If use_metrics=true failed (404 likely means DailyPerformance table is empty), try fallback
+        console.warn('Performance with use_metrics=true failed, trying fallback with use_metrics=false');
+        try {
+          const fallbackUrl = `${API_BASE_URL}/strategy/${selectedStrategy}/performance?${dateParamsStr}&use_metrics=false`;
+          const fallbackResponse = await fetch(fallbackUrl);
+          if (fallbackResponse.ok) {
+            performanceData = await fallbackResponse.json();
+            console.log('Performance data (fallback):', performanceData);
+          } else {
+            console.error('Failed to fetch performance (fallback):', fallbackResponse.status);
+            addToast('Failed to load performance metrics. Please try again.', 'error');
+          }
+        } catch (err) {
+          console.error('Error fetching performance (fallback):', err);
+          addToast('Failed to load performance metrics. Please try again.', 'error');
+        }
       }
 
       // Process transactions
@@ -470,6 +487,62 @@ const QMTTradingDashboard = () => {
     }
   }, [realtimeUpdate]);
 
+  // Manual realtime update function
+  const performRealtimeUpdate = useCallback(async () => {
+    if (!selectedStrategy) {
+      addToast('Please select a strategy first', 'error');
+      return;
+    }
+    
+    try {
+      setIsUpdating(true);
+      setUpdateProgress(10);
+      
+      // Call realtime-update API
+      const updateResponse = await fetch(`${API_BASE_URL}/realtime-update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          strategy: selectedStrategy,
+          dry_run: dryRun,
+          lookback_days: 3
+        })
+      });
+      
+      setUpdateProgress(50);
+      
+      if (!updateResponse.ok) {
+        throw new Error('Realtime update failed');
+      }
+      
+      const updateResult = await updateResponse.json();
+      console.log('Realtime update result:', updateResult);
+      
+      setUpdateProgress(70);
+      
+      if (updateResult.status === 'success' || updateResult.status === 'partial_success') {
+        // Silently refresh all data
+        await fetchAllData(true); // true = silent mode
+        setLastUpdateTime(new Date());
+        addToast('Data refreshed successfully', 'success');
+      } else {
+        addToast(`Update warning: ${updateResult.message}`, 'warning');
+      }
+      
+      setUpdateProgress(100);
+    } catch (error) {
+      console.error('Realtime update error:', error);
+      addToast(`Realtime update failed: ${error.message}`, 'error');
+    } finally {
+      setTimeout(() => {
+        setIsUpdating(false);
+        setUpdateProgress(0);
+      }, 500);
+    }
+  }, [selectedStrategy, dryRun, addToast, fetchAllData]);
+
   // Realtime update interval effect
   useEffect(() => {
     if (!realtimeUpdate || !selectedStrategy || !dataLoaded) {
@@ -478,64 +551,11 @@ const QMTTradingDashboard = () => {
 
     const intervalMs = UPDATE_INTERVALS[updateInterval].value;
     
-    const performRealtimeUpdate = async () => {
-      try {
-        setIsUpdating(true);
-        setUpdateProgress(10);
-        
-        // Call realtime-update API
-        const updateResponse = await fetch(`${API_BASE_URL}/realtime-update`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            strategy: selectedStrategy,
-            dry_run: dryRun,
-            lookback_days: 7
-          })
-        });
-        
-        setUpdateProgress(50);
-        
-        if (!updateResponse.ok) {
-          throw new Error('Realtime update failed');
-        }
-        
-        const updateResult = await updateResponse.json();
-        console.log('Realtime update result:', updateResult);
-        
-        setUpdateProgress(70);
-        
-        if (updateResult.status === 'success' || updateResult.status === 'partial_success') {
-          // Silently refresh all data
-          await fetchAllData(true); // true = silent mode
-          setLastUpdateTime(new Date());
-          addToast('Data refreshed successfully', 'success');
-        } else {
-          addToast(`Update warning: ${updateResult.message}`, 'warning');
-        }
-        
-        setUpdateProgress(100);
-      } catch (error) {
-        console.error('Realtime update error:', error);
-        addToast(`Realtime update failed: ${error.message}`, 'error');
-      } finally {
-        setTimeout(() => {
-          setIsUpdating(false);
-          setUpdateProgress(0);
-        }, 500);
-      }
-    };
-
-    // Perform initial update
-    performRealtimeUpdate();
-    
-    // Set up interval
+    // Set up interval without immediate execution
     const intervalId = setInterval(performRealtimeUpdate, intervalMs);
     
     return () => clearInterval(intervalId);
-  }, [realtimeUpdate, updateInterval, selectedStrategy, dryRun, dataLoaded, addToast, fetchAllData]);
+  }, [realtimeUpdate, updateInterval, selectedStrategy, dataLoaded, performRealtimeUpdate]);
 
   // Remove auto-fetch - user must click Refresh button
   // useEffect(() => {
@@ -695,6 +715,16 @@ const QMTTradingDashboard = () => {
                 >
                   <RefreshCw className="w-4 h-4" />
                   <span>Load Data</span>
+                </button>
+                
+                <button
+                  onClick={performRealtimeUpdate}
+                  disabled={!selectedStrategy || isUpdating}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Trigger realtime update (fetches latest data from backend)"
+                >
+                  <Activity className="w-4 h-4" />
+                  <span>Realtime Update</span>
                 </button>
                 
                 <span className={`px-2 py-1 rounded text-sm ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
@@ -858,6 +888,16 @@ const QMTTradingDashboard = () => {
                 >
                   <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                   <span>Refresh</span>
+                </button>
+                
+                <button
+                  onClick={performRealtimeUpdate}
+                  disabled={!selectedStrategy || isUpdating}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Trigger realtime update (fetches latest data from backend)"
+                >
+                  <Activity className={`w-4 h-4 ${isUpdating ? 'animate-pulse' : ''}`} />
+                  <span>Realtime Update</span>
                 </button>
                 
                 <div className="flex items-center gap-2 text-sm text-gray-500">
