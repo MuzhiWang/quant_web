@@ -6,6 +6,7 @@ import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
 import { LoadingSection } from './components/LoadingOverlay';
 import { AddOrderModal } from './components/AddOrderModal';
+import { PortfolioView } from './components/PortfolioView';
 import { calculateAllMetrics } from './metric_utils';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000/api';
@@ -70,12 +71,14 @@ const QMTTradingDashboard = () => {
   const [holdingsHistory, setHoldingsHistory] = useState({});
   const [loading, setLoading] = useState(false); // Changed from true to false
   const [criticalError, setCriticalError] = useState(null); // Only for critical failures
-  const [activeTab, setActiveTab] = useState(() => 
-    loadFromStorage(STORAGE_KEYS.ACTIVE_TAB, 'overview')
+  const [activeTab, setActiveTab] = useState(() =>
+    loadFromStorage(STORAGE_KEYS.ACTIVE_TAB, 'portfolio')
   );
   const [toasts, setToasts] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
   const [showAddOrder, setShowAddOrder] = useState(false); // Add Order modal visibility
+  const [portfolio, setPortfolio] = useState(null); // One-call portfolio snapshot
+  const [loadingPortfolio, setLoadingPortfolio] = useState(false);
   const [valueDisplayMode, setValueDisplayMode] = useState(() => 
     loadFromStorage(STORAGE_KEYS.VALUE_DISPLAY_MODE, 'percentage')
   );
@@ -189,17 +192,42 @@ const QMTTradingDashboard = () => {
     }
   };
 
+  // One-call portfolio snapshot (KPIs+risk, positions, equity curve, recent trades).
+  const fetchPortfolio = useCallback(async (silent = false) => {
+    if (!selectedStrategy) return;
+    setLoadingPortfolio(true);
+    try {
+      const params = new URLSearchParams({ dry_run: dryRun, days: '100', trades: '20' });
+      const res = await fetch(`${API_BASE_URL}/strategy/${selectedStrategy}/portfolio?${params.toString()}`);
+      if (res.status === 404) {
+        setPortfolio(null); // strategy has no computed data yet
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setPortfolio(await res.json());
+    } catch (error) {
+      console.error('Error fetching portfolio:', error);
+      setPortfolio(null);
+      if (!silent) addToast(`Failed to load portfolio: ${error.message}`, 'error');
+    } finally {
+      setLoadingPortfolio(false);
+    }
+  }, [selectedStrategy, dryRun, addToast]);
+
   const fetchAllData = useCallback(async (silent = false) => {
     if (!selectedStrategy) {
       addToast('Please select a strategy first', 'error');
       return;
     }
-    
+
     if (!selectedBenchmark) {
       addToast('Loading benchmark data...', 'info');
       return;
     }
-    
+
+    // Load the portfolio snapshot alongside the rest (independent, non-blocking).
+    fetchPortfolio(silent);
+
     // Only show loading spinner if not in silent mode
     if (!silent) {
       setLoading(true);
@@ -424,7 +452,7 @@ const QMTTradingDashboard = () => {
         });
       }
     }
-  }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast]);
+  }, [selectedStrategy, selectedBenchmark, startDate, endDate, dryRun, addToast, fetchPortfolio]);
 
   useEffect(() => {
     fetchStrategies();
@@ -964,7 +992,7 @@ const QMTTradingDashboard = () => {
       <div className="bg-white border-b border-gray-200 md:hidden">
         <div className="max-w-7xl mx-auto px-6">
           <nav className="flex gap-8">
-            {['overview', 'holdings', 'transactions'].map(tab => (
+            {['portfolio', 'overview', 'holdings', 'transactions'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -987,6 +1015,7 @@ const QMTTradingDashboard = () => {
         <aside className="hidden md:flex w-56 flex-shrink-0 flex-col bg-white border-r border-gray-200 overflow-y-auto">
           <nav className="p-4">
             {[
+              { id: 'portfolio', label: 'Portfolio', icon: PieChart },
               { id: 'overview', label: 'Overview', icon: BarChart3 },
               { id: 'holdings', label: 'Holdings', icon: Wallet },
               { id: 'transactions', label: 'Transactions', icon: List }
@@ -1009,6 +1038,25 @@ const QMTTradingDashboard = () => {
 
         {/* Main Content Area with Independent Scrolling */}
         <div className="flex-1 overflow-y-auto px-6 py-8">
+        {/* Portfolio Tab */}
+        {activeTab === 'portfolio' && (
+          <LoadingSection isLoading={loadingPortfolio}>
+            {portfolio ? (
+              <PortfolioView data={portfolio} />
+            ) : (
+              <div className="text-center py-16">
+                <PieChart className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No Portfolio Data</h3>
+                <p className="text-gray-500">
+                  {loadingPortfolio
+                    ? 'Loading portfolio…'
+                    : 'No computed portfolio data for this strategy yet. Click "Refresh" / "Load Data", or run an EOD/realtime update on the backend.'}
+                </p>
+              </div>
+            )}
+          </LoadingSection>
+        )}
+
         {/* Overview Tab */}
         {activeTab === 'overview' && summary && (
           <>
