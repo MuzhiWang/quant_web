@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw, BarChart3, Wallet, List } from 'lucide-react';
+import { TrendingUp, DollarSign, Activity, PieChart, Clock, AlertCircle, Calendar, RefreshCw, BarChart3, Wallet, List, ShoppingCart } from 'lucide-react';
 import { ToastContainer } from './components/Toast';
 import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
 import { LoadingSection } from './components/LoadingOverlay';
+import { AddOrderModal } from './components/AddOrderModal';
 import { calculateAllMetrics } from './metric_utils';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000/api';
@@ -74,6 +75,7 @@ const QMTTradingDashboard = () => {
   );
   const [toasts, setToasts] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
+  const [showAddOrder, setShowAddOrder] = useState(false); // Add Order modal visibility
   const [valueDisplayMode, setValueDisplayMode] = useState(() => 
     loadFromStorage(STORAGE_KEYS.VALUE_DISPLAY_MODE, 'percentage')
   );
@@ -726,7 +728,16 @@ const QMTTradingDashboard = () => {
                   <Activity className="w-4 h-4" />
                   <span>Realtime Update</span>
                 </button>
-                
+
+                <button
+                  onClick={() => setShowAddOrder(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                  title="Manually inject an order into the trading engine"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  <span>Add Order</span>
+                </button>
+
                 <span className={`px-2 py-1 rounded text-sm ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                   {dryRun ? 'Dry Run' : 'Live Trading'}
                 </span>
@@ -734,7 +745,18 @@ const QMTTradingDashboard = () => {
             </div>
           </div>
         </header>
-        
+
+        <ToastContainer toasts={toasts} removeToast={removeToast} />
+        <AddOrderModal
+          isOpen={showAddOrder}
+          onClose={() => setShowAddOrder(false)}
+          apiBaseUrl={API_BASE_URL}
+          strategies={strategies}
+          defaultStrategy={selectedStrategy}
+          onSuccess={() => { if (selectedStrategy) fetchAllData(false); }}
+          addToast={addToast}
+        />
+
         <div className="flex items-center justify-center" style={{ height: 'calc(100vh - 100px)' }}>
           <div className="text-center max-w-md p-8">
             <Activity className="w-24 h-24 text-gray-300 mx-auto mb-4" />
@@ -773,7 +795,18 @@ const QMTTradingDashboard = () => {
       
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} removeToast={removeToast} />
-      
+
+      {/* Add Order Modal */}
+      <AddOrderModal
+        isOpen={showAddOrder}
+        onClose={() => setShowAddOrder(false)}
+        apiBaseUrl={API_BASE_URL}
+        strategies={strategies}
+        defaultStrategy={selectedStrategy}
+        onSuccess={() => fetchAllData(false)}
+        addToast={addToast}
+      />
+
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -899,7 +932,16 @@ const QMTTradingDashboard = () => {
                   <Activity className={`w-4 h-4 ${isUpdating ? 'animate-pulse' : ''}`} />
                   <span>Realtime Update</span>
                 </button>
-                
+
+                <button
+                  onClick={() => setShowAddOrder(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                  title="Manually inject an order into the trading engine"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  <span>Add Order</span>
+                </button>
+
                 <div className="flex items-center gap-2 text-sm text-gray-500">
                   <Clock className="w-4 h-4" />
                   <span>{summary?.date}</span>
