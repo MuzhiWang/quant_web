@@ -32,7 +32,8 @@ export const AddOrderModal = ({
   addToast,
 }) => {
   const [form, setForm] = useState(emptyForm(defaultStrategy));
-  const [mode, setMode] = useState(null); // { dry_run_mode, mode_label }
+  const [mode, setMode] = useState(null); // { dry_run_mode, mode_label } — the API server's own mode
+  const [dryRun, setDryRun] = useState(null); // selected mode for THIS order; sent as `dry_run` (overrides server)
   const [modeLoading, setModeLoading] = useState(false);
   const [modeError, setModeError] = useState(null);
   const [confirming, setConfirming] = useState(false);
@@ -47,6 +48,7 @@ export const AddOrderModal = ({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setMode(data);
+      setDryRun(data.dry_run_mode); // default the selector to this server's mode
     } catch (err) {
       setModeError(err.message);
       setMode(null);
@@ -62,6 +64,7 @@ export const AddOrderModal = ({
       setConfirming(false);
       setSubmitting(false);
       setFormError(null);
+      setDryRun(null); // fetchMode sets the default once the server mode is known
       fetchMode();
     }
   }, [isOpen, defaultStrategy, fetchMode]);
@@ -72,6 +75,7 @@ export const AddOrderModal = ({
 
   const validate = () => {
     if (!form.strategy.trim()) return 'Strategy is required.';
+    if (dryRun !== true && dryRun !== false) return 'Select an execution mode (DRY RUN or LIVE).';
     if (!['BUY', 'SELL'].includes(form.action)) return 'Action must be BUY or SELL.';
     if (!ORDER_CODE_RE.test(form.code.trim())) return 'Code must be QMT (600000.SH / 000001.SZ) or JoinQuant (513500.XSHG / 000001.XSHE) format.';
     const amt = Number(form.amount);
@@ -101,6 +105,7 @@ export const AddOrderModal = ({
         amount: Number(form.amount),
       };
       if (form.price !== '') payload.price = Number(form.price);
+      payload.dry_run = dryRun; // queue in the explicitly selected mode
 
       const res = await fetch(`${apiBaseUrl}/order`, {
         method: 'POST',
@@ -125,8 +130,10 @@ export const AddOrderModal = ({
     }
   };
 
-  const isLive = mode && !mode.dry_run_mode;
-  const modeLabel = mode ? mode.mode_label : '—';
+  // Banner + confirm reflect the SELECTED mode (what the order will actually run as).
+  const isLive = dryRun === false;
+  const modeLabel = dryRun === false ? 'LIVE' : dryRun === true ? 'DRY RUN' : (mode ? mode.mode_label : '—');
+  const isOverriding = mode && dryRun !== null && dryRun !== mode.dry_run_mode;
 
   return (
     <div
@@ -198,6 +205,41 @@ export const AddOrderModal = ({
                   placeholder="strategy name"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+              )}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Execution mode</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDryRun(true)}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium ${
+                    dryRun === true
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  DRY RUN (simulation)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDryRun(false)}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium ${
+                    dryRun === false
+                      ? 'border-red-600 bg-red-50 text-red-700'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  LIVE (real money)
+                </button>
+              </div>
+              {isOverriding && (
+                <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  This API server is in {mode.mode_label}; the order will be queued as{' '}
+                  <strong>{modeLabel}</strong> to match the target engine.
+                </p>
               )}
             </div>
 
