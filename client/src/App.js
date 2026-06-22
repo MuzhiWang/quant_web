@@ -6,6 +6,7 @@ import { MetricCard } from './components/MetricCard';
 import { MetricsGrid } from './components/MetricsGrid';
 import { LoadingSection } from './components/LoadingOverlay';
 import { AddOrderModal } from './components/AddOrderModal';
+import { AddCashModal } from './components/AddCashModal';
 import { PortfolioView } from './components/PortfolioView';
 import { calculateAllMetrics } from './metric_utils';
 
@@ -77,6 +78,7 @@ const QMTTradingDashboard = () => {
   const [toasts, setToasts] = useState([]);
   const [dataLoaded, setDataLoaded] = useState(false); // Track if data has been loaded
   const [showAddOrder, setShowAddOrder] = useState(false); // Add Order modal visibility
+  const [showAddCash, setShowAddCash] = useState(false); // Add/Withdraw Cash modal visibility
   const [portfolio, setPortfolio] = useState(null); // One-call portfolio snapshot
   const [loadingPortfolio, setLoadingPortfolio] = useState(false);
   const [valueDisplayMode, setValueDisplayMode] = useState(() => 
@@ -766,6 +768,15 @@ const QMTTradingDashboard = () => {
                   <span>Add Order</span>
                 </button>
 
+                <button
+                  onClick={() => setShowAddCash(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                  title="Add or withdraw cash for a strategy"
+                >
+                  <Wallet className="w-4 h-4" />
+                  <span>Add Cash</span>
+                </button>
+
                 <span className={`px-2 py-1 rounded text-sm ${dryRun ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                   {dryRun ? 'Dry Run' : 'Live Trading'}
                 </span>
@@ -778,6 +789,15 @@ const QMTTradingDashboard = () => {
         <AddOrderModal
           isOpen={showAddOrder}
           onClose={() => setShowAddOrder(false)}
+          apiBaseUrl={API_BASE_URL}
+          strategies={strategies}
+          defaultStrategy={selectedStrategy}
+          onSuccess={() => { if (selectedStrategy) fetchAllData(false); }}
+          addToast={addToast}
+        />
+        <AddCashModal
+          isOpen={showAddCash}
+          onClose={() => setShowAddCash(false)}
           apiBaseUrl={API_BASE_URL}
           strategies={strategies}
           defaultStrategy={selectedStrategy}
@@ -828,6 +848,17 @@ const QMTTradingDashboard = () => {
       <AddOrderModal
         isOpen={showAddOrder}
         onClose={() => setShowAddOrder(false)}
+        apiBaseUrl={API_BASE_URL}
+        strategies={strategies}
+        defaultStrategy={selectedStrategy}
+        onSuccess={() => fetchAllData(false)}
+        addToast={addToast}
+      />
+
+      {/* Add / Withdraw Cash Modal */}
+      <AddCashModal
+        isOpen={showAddCash}
+        onClose={() => setShowAddCash(false)}
         apiBaseUrl={API_BASE_URL}
         strategies={strategies}
         defaultStrategy={selectedStrategy}
@@ -968,6 +999,15 @@ const QMTTradingDashboard = () => {
                 >
                   <ShoppingCart className="w-4 h-4" />
                   <span>Add Order</span>
+                </button>
+
+                <button
+                  onClick={() => setShowAddCash(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                  title="Add or withdraw cash for a strategy"
+                >
+                  <Wallet className="w-4 h-4" />
+                  <span>Add Cash</span>
                 </button>
 
                 <div className="flex items-center gap-2 text-sm text-gray-500">
