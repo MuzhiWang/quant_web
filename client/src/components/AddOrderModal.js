@@ -9,7 +9,10 @@ import { X, AlertTriangle, Loader2, ShoppingCart } from 'lucide-react';
  * the user which mode the order will actually run in, then require an explicit confirm
  * step before submitting — so a user viewing dry-run data can't unknowingly fire a LIVE order.
  */
-const QMT_CODE_RE = /^\d{6}\.(SH|SZ)$/i;
+// Accepts QMT format (600000.SH / 000001.SZ) or JoinQuant format
+// (600000.XSHG / 513500.XSHG / 000001.XSHE). The backend normalize_code maps
+// both to the stocks-table .SS/.SZ form, so either is valid here.
+const ORDER_CODE_RE = /^\d{6}\.(SH|SZ|XSHG|XSHE)$/i;
 
 const emptyForm = (strategy) => ({
   strategy: strategy || '',
@@ -70,7 +73,7 @@ export const AddOrderModal = ({
   const validate = () => {
     if (!form.strategy.trim()) return 'Strategy is required.';
     if (!['BUY', 'SELL'].includes(form.action)) return 'Action must be BUY or SELL.';
-    if (!QMT_CODE_RE.test(form.code.trim())) return 'Code must be QMT format, e.g. 600000.SH or 000001.SZ.';
+    if (!ORDER_CODE_RE.test(form.code.trim())) return 'Code must be QMT (600000.SH / 000001.SZ) or JoinQuant (513500.XSHG / 000001.XSHE) format.';
     const amt = Number(form.amount);
     if (!Number.isInteger(amt) || amt <= 0) return 'Amount must be a positive whole number of shares.';
     if (form.price !== '' && !(Number(form.price) > 0)) return 'Price, if set, must be greater than 0.';
@@ -216,7 +219,7 @@ export const AddOrderModal = ({
                   type="text"
                   value={form.code}
                   onChange={(e) => setField('code', e.target.value)}
-                  placeholder="600000.SH"
+                  placeholder="600000.SH or 513500.XSHG"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
