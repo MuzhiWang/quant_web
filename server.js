@@ -8,6 +8,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8001/api';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+// Server-side token for the centralized backend's write endpoints (/api/order,/api/cash).
+// Kept in the BFF env — never sent to the browser — and attached as X-API-Token on proxied
+// requests. Leave empty if the backend has no token configured (dev).
+const API_TOKEN = process.env.API_TOKEN || '';
+const authHeaders = (extra = {}) => (API_TOKEN ? { ...extra, 'X-API-Token': API_TOKEN } : extra);
 
 // Middleware
 app.use(cors({
@@ -33,7 +38,7 @@ app.get('/api/*', async (req, res) => {
     
     console.log(`[Proxy] ${req.method} ${url}`);
     
-    const response = await axios.get(url);
+    const response = await axios.get(url, { headers: authHeaders() });
     res.json(response.data);
   } catch (error) {
     console.error('[Proxy Error]', error.message);
@@ -54,9 +59,7 @@ app.post('/api/*', async (req, res) => {
     console.log(`[Proxy POST Body]`, req.body);
     
     const response = await axios.post(url, req.body, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers: authHeaders({ 'Content-Type': 'application/json' })
     });
     res.json(response.data);
   } catch (error) {
@@ -75,6 +78,7 @@ app.get('/health', (req, res) => {
     service: 'QMT Trading Dashboard',
     timestamp: new Date().toISOString(),
     backend: API_BASE_URL,
+    apiAuth: API_TOKEN ? 'enabled' : 'disabled',
     nodeVersion: process.version
   });
 });
